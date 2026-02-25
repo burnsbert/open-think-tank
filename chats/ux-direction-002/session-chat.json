@@ -1,0 +1,97 @@
+{
+	"formatVersion": "1.0",
+	"session": {
+		"id": "ux-direction-002",
+		"title": "UX Direction Review",
+		"startedAt": "2026-02-25T17:20:00.000Z",
+		"updatedAt": "2026-02-25T17:27:00.000Z",
+		"topic": "First-pass product direction for the chat + notes flow"
+	},
+	"personas": [
+		{
+			"id": "blake",
+			"name": "Blake",
+			"displayName": "Blake - The Pragmatist",
+			"role": "ai-persona",
+			"avatar": "./avatars/blake.jpg",
+			"avatarPosition": "52% 9%",
+			"avatarScale": 1.47,
+			"prioritizes": ["quality", "best practices", "business requirements"]
+		},
+		{
+			"id": "yui",
+			"name": "Yui",
+			"displayName": "Yui - The User Champion",
+			"role": "ai-persona",
+			"avatar": "./avatars/yui.png",
+			"avatarPosition": "73% 5%",
+			"avatarScale": 2.05,
+			"prioritizes": ["user experience", "fun/exciting features", "consistency and polish"]
+		},
+		{
+			"id": "grant",
+			"name": "Grant",
+			"displayName": "Grant - The Innovator",
+			"role": "ai-persona",
+			"avatar": "./avatars/grant.jpg",
+			"avatarPosition": "56% 4%",
+			"avatarScale": 2.09,
+			"prioritizes": ["innovation", "performance", "exciting features"]
+		},
+		{
+			"id": "julia",
+			"name": "Julia",
+			"displayName": "Julia - The Strategist",
+			"role": "ai-persona",
+			"avatar": "./avatars/julia.jpg",
+			"avatarPosition": "25% 11%",
+			"avatarScale": 2.4,
+			"prioritizes": ["defining success", "pros/cons analysis", "creative compromises"]
+		},
+		{
+			"id": "user",
+			"name": "You",
+			"displayName": "You",
+			"role": "human",
+			"avatar": "./avatars/user.png",
+			"avatarPosition": "50% 44%",
+			"avatarScale": 1.2,
+			"prioritizes": ["shipping quickly", "clear decisions"]
+		}
+	],
+	"notes": {
+		"content": "## UX Direction Notes\n- Keep chat and notes visible at all times\n- Make message sending keyboard-first\n- Preserve full session context in JSON"
+	},
+	"messages": [
+		{
+			"id": "ux-001",
+			"speakerId": "julia",
+			"timestamp": "2026-02-25T17:20:00.000Z",
+			"text": "Let's define our success criteria for phase one before we add API complexity."
+		},
+		{
+			"id": "ux-002",
+			"speakerId": "yui",
+			"timestamp": "2026-02-25T17:22:00.000Z",
+			"text": "A great first pass should feel intuitive in under 10 seconds for a new user."
+		},
+		{
+			"id": "ux-003",
+			"speakerId": "grant",
+			"timestamp": "2026-02-25T17:24:00.000Z",
+			"text": "Let's design it so realtime bot streaming can slot in with minimal refactor."
+		},
+		{
+			"id": "ux-004",
+			"speakerId": "blake",
+			"timestamp": "2026-02-25T17:26:00.000Z",
+			"text": "We'll ship faster if the chat list and per-chat storage model are clear from day one."
+		},
+		{
+			"id": "ux-005",
+			"speakerId": "user",
+			"timestamp": "2026-02-25T17:27:00.000Z",
+			"text": "Let's implement a chat directory UI first, then wire in bot posting later."
+		}
+	]
+}

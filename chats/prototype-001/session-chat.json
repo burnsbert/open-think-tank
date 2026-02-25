@@ -1,0 +1,97 @@
+{
+	"formatVersion": "1.0",
+	"session": {
+		"id": "prototype-001",
+		"title": "Prototype Kickoff",
+		"startedAt": "2026-02-25T16:00:00.000Z",
+		"updatedAt": "2026-02-25T16:03:20.000Z",
+		"topic": "Prototype for split-view collaboration app"
+	},
+	"personas": [
+		{
+			"id": "blake",
+			"name": "Blake",
+			"displayName": "Blake - The Pragmatist",
+			"role": "ai-persona",
+			"avatar": "./avatars/blake.jpg",
+			"avatarPosition": "52% 9%",
+			"avatarScale": 1.47,
+			"prioritizes": ["quality", "best practices", "business requirements"]
+		},
+		{
+			"id": "yui",
+			"name": "Yui",
+			"displayName": "Yui - The User Champion",
+			"role": "ai-persona",
+			"avatar": "./avatars/yui.png",
+			"avatarPosition": "73% 5%",
+			"avatarScale": 2.05,
+			"prioritizes": ["user experience", "fun/exciting features", "consistency and polish"]
+		},
+		{
+			"id": "grant",
+			"name": "Grant",
+			"displayName": "Grant - The Innovator",
+			"role": "ai-persona",
+			"avatar": "./avatars/grant.jpg",
+			"avatarPosition": "56% 4%",
+			"avatarScale": 2.09,
+			"prioritizes": ["innovation", "performance", "exciting features"]
+		},
+		{
+			"id": "julia",
+			"name": "Julia",
+			"displayName": "Julia - The Strategist",
+			"role": "ai-persona",
+			"avatar": "./avatars/julia.jpg",
+			"avatarPosition": "25% 11%",
+			"avatarScale": 2.4,
+			"prioritizes": ["defining success", "pros/cons analysis", "creative compromises"]
+		},
+		{
+			"id": "user",
+			"name": "You",
+			"displayName": "You",
+			"role": "human",
+			"avatar": "./avatars/user.png",
+			"avatarPosition": "50% 44%",
+			"avatarScale": 1.2,
+			"prioritizes": ["shipping quickly", "clear decisions"]
+		}
+	],
+	"notes": {
+		"content": "## Session Goals\n- Validate split-view layout and interaction model\n- Keep chat and notes visible at the same time\n\n## Draft Decisions\n- JSON is the source of truth for personas/messages/notes\n- AI bot responses will be added later through an external API"
+	},
+	"messages": [
+		{
+			"id": "msg-001",
+			"speakerId": "blake",
+			"timestamp": "2026-02-25T16:01:00.000Z",
+			"text": "Let's keep this first pass practical: clear UI, stable message flow, and a JSON schema we won't regret later."
+		},
+		{
+			"id": "msg-002",
+			"speakerId": "yui",
+			"timestamp": "2026-02-25T16:01:35.000Z",
+			"text": "I want the experience to feel inviting. Smooth layout, readable chat bubbles, and obvious notes editing are key."
+		},
+		{
+			"id": "msg-003",
+			"speakerId": "grant",
+			"timestamp": "2026-02-25T16:02:10.000Z",
+			"text": "Can we structure messages so bots can stream later? Even in prototype mode, let's leave room for realtime enhancements."
+		},
+		{
+			"id": "msg-004",
+			"speakerId": "julia",
+			"timestamp": "2026-02-25T16:02:45.000Z",
+			"text": "Success for this phase: one-screen collaboration that captures both conversation and decisions with zero friction."
+		},
+		{
+			"id": "msg-005",
+			"speakerId": "user",
+			"timestamp": "2026-02-25T16:03:20.000Z",
+			"text": "Great. Let's ship the prototype UI first, then wire bot posting via API."
+		}
+	]
+}

@@ -1,0 +1,5 @@
+# Private session files
+/.*.md
+
+# macOS
+.DS_Store

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Think Tank Chat</title>
+	<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'><defs><linearGradient id='g' x1='6' y1='6' x2='30' y2='30' gradientUnits='userSpaceOnUse'><stop stop-color='%238BB2FF'/><stop offset='1' stop-color='%234158F5'/></linearGradient></defs><path d='M18 9.8L20.6 15.4L26.8 16.1L22.2 20.2L23.5 26.2L18 23.1L12.5 26.2L13.8 20.2L9.2 16.1L15.4 15.4L18 9.8Z' fill='url(%23g)'/></svg>">
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
+	<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<a href="./index.html" class="brand-mark">
+			<span class="brand-icon-wrap" aria-hidden="true">
+				<img src="./assets/brand-icon.svg" class="brand-icon" alt="">
+			</span>
+			<span class="brand-name">Open Think Tank</span>
+		</a>
+<div class="topbar-actions">
+			<button id="theme-toggle" class="secondary-btn" type="button" aria-pressed="false">Dark Mode</button>
+			<button id="download-session" class="secondary-btn" type="button">Export JSON</button>
+		</div>
+	</header>
+
+	<div class="app-shell">
+<main class="workspace">
+			<section class="panel chat-panel">
+				<div class="panel-header">
+					<h2>Live Chat</h2>
+					</div>
+
+				<div id="chat-list" class="chat-list" aria-live="polite"></div>
+
+				<form id="chat-form" class="composer">
+					<label for="chat-input" class="sr-only">Type your message</label>
+					<textarea id="chat-input" rows="2" placeholder="Type your message to the room..."></textarea>
+					<button type="submit" class="primary-btn">Send</button>
+				</form>
+			</section>
+
+			<section class="panel notes-panel">
+				<div class="panel-header">
+					<h2>Session Notes &amp; Decisions</h2>
+					</div>
+
+				<label for="notes-editor" class="sr-only">Session notes editor</label>
+				<textarea id="notes-editor" class="notes-editor"></textarea>
+
+<section class="avatar-tuner" aria-label="Avatar tuning">
+					<h3>Avatar Tuning</h3>
+					<p class="avatar-tuner-help">Hidden for now; preserved for future tweaks.</p>
+
+					<div class="tuner-grid">
+						<label for="tune-persona">Persona</label>
+						<select id="tune-persona"></select>
+
+						<label for="tune-scale">Zoom</label>
+						<div class="slider-row">
+							<input id="tune-scale" type="range" min="1" max="2.4" step="0.01">
+							<output id="tune-scale-value"></output>
+						</div>
+
+						<label for="tune-x">X Position</label>
+						<div class="slider-row">
+							<input id="tune-x" type="range" min="0" max="100" step="1">
+							<output id="tune-x-value"></output>
+						</div>
+
+						<label for="tune-y">Y Position</label>
+						<div class="slider-row">
+							<input id="tune-y" type="range" min="0" max="100" step="1">
+							<output id="tune-y-value"></output>
+						</div>
+					</div>
+
+					<button id="copy-avatar-tuning" class="secondary-btn" type="button">Copy Tuning JSON</button>
+				</section>
+			</section>
+		</main>
+	</div>
+
+	<script type="module" src="./app.js"></script>
+	<script type="module" src="./theme.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Open Think Tank icon">
+	<defs>
+		<linearGradient id="sg" x1="9" y1="9" x2="27" y2="27" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#8BB2FF"/>
+			<stop offset="1" stop-color="#4158F5"/>
+		</linearGradient>
+	</defs>
+	<path transform="translate(9,9) scale(0.7) translate(-18,-18)" d="M18 9.8L20.6 15.4L26.8 16.1L22.2 20.2L23.5 26.2L18 23.1L12.5 26.2L13.8 20.2L9.2 16.1L15.4 15.4L18 9.8Z" fill="url(#sg)"/>
+	<path transform="translate(27,9) scale(0.7) translate(-18,-18)" d="M18 9.8L20.6 15.4L26.8 16.1L22.2 20.2L23.5 26.2L18 23.1L12.5 26.2L13.8 20.2L9.2 16.1L15.4 15.4L18 9.8Z" fill="url(#sg)"/>
+	<path transform="translate(9,27) scale(0.7) translate(-18,-18)" d="M18 9.8L20.6 15.4L26.8 16.1L22.2 20.2L23.5 26.2L18 23.1L12.5 26.2L13.8 20.2L9.2 16.1L15.4 15.4L18 9.8Z" fill="url(#sg)"/>
+	<path transform="translate(27,27) scale(0.7) translate(-18,-18)" d="M18 9.8L20.6 15.4L26.8 16.1L22.2 20.2L23.5 26.2L18 23.1L12.5 26.2L13.8 20.2L9.2 16.1L15.4 15.4L18 9.8Z" fill="url(#sg)"/>
+</svg>

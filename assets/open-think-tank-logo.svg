@@ -1,0 +1,14 @@
+<svg width="244" height="36" viewBox="0 0 244 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="logoTitle logoDesc">
+	<title id="logoTitle">Open Think Tank</title>
+	<desc id="logoDesc">Open Think Tank logo mark and wordmark.</desc>
+	<defs>
+		<linearGradient id="ottLogoGradient" x1="6" y1="6" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#6EA0FF"/>
+			<stop offset="1" stop-color="#3E6DF6"/>
+		</linearGradient>
+	</defs>
+	<rect x="2.5" y="2.5" width="31" height="31" rx="10.5" fill="#F5F8FF" stroke="#C9D8FA"/>
+	<path d="M18 9.8L20.6 15.4L26.8 16.1L22.2 20.2L23.5 26.2L18 23.1L12.5 26.2L13.8 20.2L9.2 16.1L15.4 15.4L18 9.8Z" fill="url(#ottLogoGradient)"/>
+	<text x="46" y="16" fill="#1D2942" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700">Open Think Tank</text>
+	<text x="46" y="29" fill="#62708F" font-family="Inter, Arial, sans-serif" font-size="10.5" font-weight="500">Collaborative Decision Workspace</text>
+</svg>

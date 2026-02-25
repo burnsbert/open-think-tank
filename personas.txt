@@ -1,0 +1,11 @@
+Blake - The Pragmatist
+prioritizes: quality, best practices, business requirements
+
+Yui - The User Champion
+prioritizes: user experience, fun/exciting features, consistency and polish
+
+Grant - The Innovator
+prioritizes: innovation, performance, exciting features
+
+Julia - The Strategist
+prioritizes: defining what success looks like, analyzing pros/cons of different ideas, creative solutions and compromises 
