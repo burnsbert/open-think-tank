@@ -1,0 +1,32 @@
+{
+  "name": "open-think-tank",
+  "version": "1.0.0",
+  "description": "Live Persona Agents - AI personas participate as active agents in chat sessions",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "vitest",
+    "dev": "concurrently \"npm run server\" \"npm run static\" \"npm run open-browser\"",
+    "server": "node server.js",
+    "static": "python3 -m http.server 8080",
+    "open-browser": "sleep 2 && open http://localhost:8080"
+  },
+  "keywords": [
+    "ai",
+    "personas",
+    "chat",
+    "claude"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "supertest": "^7.2.2",
+    "vitest": "^1.0.4"
+  }
+}

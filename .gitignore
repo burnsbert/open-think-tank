@@ -1,5 +1,10 @@
 # Private session files
 /.*.md
+/.maestro/
+/.stories/
+
+# Dependencies
+node_modules/
 
 # macOS
 .DS_Store

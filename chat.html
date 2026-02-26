@@ -18,18 +18,38 @@
 			</span>
 			<span class="brand-name">Open Think Tank</span>
 		</a>
-<div class="topbar-actions">
+		<div class="topbar-actions">
 			<button id="theme-toggle" class="secondary-btn" type="button" aria-pressed="false">Dark Mode</button>
 			<button id="download-session" class="secondary-btn" type="button">Export JSON</button>
 		</div>
 	</header>
 
 	<div class="app-shell">
-<main class="workspace">
+		<main class="workspace">
 			<section class="panel chat-panel">
-				<div class="panel-header">
+				<div class="panel-header panel-header--row">
 					<h2>Live Chat</h2>
+					<div class="chat-controls">
+						<label class="chat-controls-label" for="auto-continue-select">Auto</label>
+						<select id="auto-continue-select" class="chat-controls-select" aria-label="Auto-continue interval">
+							<option value="0">OFF</option>
+							<option value="10">10s</option>
+							<option value="30">30s</option>
+							<option value="60">60s</option>
+							<option value="120">120s</option>
+						</select>
+						<label class="chat-controls-label" for="model-select">Model</label>
+						<select id="model-select" class="chat-controls-select" aria-label="AI model">
+							<option value="sonnet" selected>sonnet</option>
+							<option value="opus">opus</option>
+							<option value="haiku">haiku</option>
+						</select>
+						<button id="continue-btn" class="primary-btn continue-btn" type="button">
+							<span class="continue-btn-label">Continue</span>
+							<span class="continue-btn-spinner" aria-hidden="true"></span>
+						</button>
 					</div>
+				</div>
 
 				<div id="chat-list" class="chat-list" aria-live="polite"></div>
 
@@ -43,12 +63,22 @@
 			<section class="panel notes-panel">
 				<div class="panel-header">
 					<h2>Session Notes &amp; Decisions</h2>
-					</div>
+				</div>
 
 				<label for="notes-editor" class="sr-only">Session notes editor</label>
 				<textarea id="notes-editor" class="notes-editor"></textarea>
 
-<section class="avatar-tuner" aria-label="Avatar tuning">
+				<div class="attached-files" id="attached-files">
+					<span class="attached-files-title">Attached Files</span>
+					<ul id="attached-files-list" class="attached-files-list"></ul>
+					<div id="attached-dropzone" class="attached-dropzone">
+						<input id="attached-file-picker" type="file" multiple hidden>
+						<span class="attached-dropzone-icon">📎</span>
+						<span class="attached-dropzone-label">Drop files here or <button id="attached-browse-btn" class="attached-browse-btn" type="button">browse</button></span>
+					</div>
+				</div>
+
+				<section class="avatar-tuner" aria-label="Avatar tuning">
 					<h3>Avatar Tuning</h3>
 					<p class="avatar-tuner-help">Hidden for now; preserved for future tweaks.</p>
 
@@ -79,6 +109,18 @@
 				</section>
 			</section>
 		</main>
+	</div>
+
+	<!-- Monologue Modal (hidden by default) -->
+	<div id="monologue-modal" class="monologue-modal" hidden aria-modal="true" role="dialog" aria-label="Persona monologue">
+		<div class="monologue-backdrop"></div>
+		<div class="monologue-container">
+			<header class="monologue-header">
+				<h3 class="monologue-title" id="monologue-modal-title"></h3>
+				<button class="monologue-close" type="button" aria-label="Close monologue">&times;</button>
+			</header>
+			<div class="monologue-body" id="monologue-body"></div>
+		</div>
 	</div>
 
 	<script type="module" src="./app.js"></script>
