@@ -686,9 +686,6 @@ function addAttachedFile(rawPath) {
 		saveActiveChat();
 		renderAttachedFiles();
 	}
-
-	attachedPathInput.value = "";
-	attachedAddRow.hidden = true;
 }
 
 function removeAttachedFile(path) {
@@ -802,6 +799,7 @@ async function triggerTurn() {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				sessionId: activeChatId,
+				session: sessionData.session,
 				messages: sessionData.messages,
 				notes: sessionData.notes?.content || "",
 				attachedFiles: sessionData.attachedFiles || [],
@@ -1051,6 +1049,7 @@ chatForm.addEventListener("submit", (event) => {
 	chatInput.value = "";
 	saveActiveChat();
 	renderMessages();
+	renderJsonPreview();
 	// Reset auto-continue timer after user sends a message
 	resetAutoContinueTimer();
 });
@@ -1061,6 +1060,7 @@ notesEditor.addEventListener("input", () => {
 	}
 	sessionData.notes.content = notesEditor.value;
 	saveActiveChat();
+	renderJsonPreview();
 });
 
 downloadButton.addEventListener("click", () => {

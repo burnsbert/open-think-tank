@@ -160,6 +160,44 @@ describe('GET /api/monologue/:sessionId/:personaId — parameter validation', ()
 
     expect(readMonologue).not.toHaveBeenCalled();
   });
+
+  it('returns 400 when sessionId contains path traversal (..)', async () => {
+    const res = await request(app)
+      .get('/api/monologue/..%2F..%2Fetc/passwd');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+    expect(readMonologue).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when personaId contains path traversal', async () => {
+    const res = await request(app)
+      .get('/api/monologue/session-001/..%2F..%2Fetc%2Fpasswd');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+    expect(readMonologue).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when sessionId contains forward slash', async () => {
+    // Express URL-decodes %2F to / in route params
+    const res = await request(app)
+      .get('/api/monologue/sessions%2Fsecret/blake');
+
+    // Express may not match the route when the param contains /, resulting in 404
+    // Either 400 (validated) or 404 (not matched) is acceptable — both prevent access
+    expect([400, 404]).toContain(res.status);
+    expect(readMonologue).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when personaId contains backslash', async () => {
+    const res = await request(app)
+      .get('/api/monologue/session-001/blake%5C..%5Cetc');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+    expect(readMonologue).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

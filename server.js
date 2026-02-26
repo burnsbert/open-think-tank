@@ -20,6 +20,22 @@ app.use(express.json());
 // In-memory Set of active session IDs for concurrent turn protection
 const activeSessions = new Set();
 
+/**
+ * Validate that a value is safe to use as a path segment (e.g., sessionId, personaId).
+ * Rejects values containing path separators or directory traversal sequences to prevent
+ * path traversal attacks where user input flows into path.join() calls.
+ *
+ * @param {string} value - The value to validate
+ * @returns {boolean} True if safe to use in file paths
+ */
+export function isValidPathSegment(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && !value.includes('/')
+    && !value.includes('\\')
+    && !value.includes('..');
+}
+
 // Health-check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
@@ -27,11 +43,14 @@ app.get('/api/health', (req, res) => {
 
 // POST /api/turn — run a full turn (round) of persona responses via SSE
 app.post('/api/turn', async (req, res) => {
-  const { sessionId, messages, notes, attachedFiles, model, personas } = req.body || {};
+  const { sessionId, session, messages, notes, attachedFiles, model, personas } = req.body || {};
 
   // Validate required fields
   if (!sessionId || typeof sessionId !== 'string' || sessionId.trim() === '') {
     return res.status(400).json({ error: 'sessionId is required' });
+  }
+  if (!isValidPathSegment(sessionId)) {
+    return res.status(400).json({ error: 'sessionId contains invalid characters' });
   }
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'messages must be an array' });
@@ -109,6 +128,7 @@ app.post('/api/turn', async (req, res) => {
   try {
     await runTurn({
       sessionId,
+      session: session || {},
       messages: [...messages], // shallow copy to avoid mutating caller's array
       notes: notes || '',
       attachedFiles: attachedFiles || [],
@@ -137,6 +157,11 @@ app.post('/api/turn', async (req, res) => {
 // GET /api/monologue/:sessionId/:personaId — fetch a persona's monologue entries
 app.get('/api/monologue/:sessionId/:personaId', async (req, res) => {
   const { sessionId, personaId } = req.params;
+
+  // Validate path segments to prevent path traversal
+  if (!isValidPathSegment(sessionId) || !isValidPathSegment(personaId)) {
+    return res.status(400).json({ error: 'Invalid sessionId or personaId' });
+  }
 
   try {
     const entries = await readMonologue(sessionId, personaId);

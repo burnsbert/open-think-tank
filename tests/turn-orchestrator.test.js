@@ -1404,4 +1404,72 @@ describe('runTurn — session data written to disk', () => {
     expect(writtenData.session.updatedAt >= before).toBe(true);
     expect(writtenData.session.updatedAt <= after).toBe(true);
   });
+
+  it('preserves session.title from incoming session metadata', async () => {
+    const opts = createTestOptions({
+      session: { id: 'test-session-001', title: 'My Chat Title', startedAt: '2026-01-01T00:00:00Z' },
+    });
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    expect(writtenData.session.title).toBe('My Chat Title');
+  });
+
+  it('preserves session.startedAt from incoming session metadata', async () => {
+    const opts = createTestOptions({
+      session: { id: 'test-session-001', startedAt: '2026-01-01T00:00:00Z', title: 'Test' },
+    });
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    expect(writtenData.session.startedAt).toBe('2026-01-01T00:00:00Z');
+  });
+
+  it('preserves session.topic from incoming session metadata', async () => {
+    const opts = createTestOptions({
+      session: { id: 'test-session-001', topic: 'Architecture Discussion' },
+    });
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    expect(writtenData.session.topic).toBe('Architecture Discussion');
+  });
+
+  it('overrides session.updatedAt even when incoming session has one', async () => {
+    const opts = createTestOptions({
+      session: { id: 'test-session-001', updatedAt: '2020-01-01T00:00:00Z' },
+    });
+    const before = new Date().toISOString();
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    // updatedAt should be fresh, not the old one
+    expect(writtenData.session.updatedAt >= before).toBe(true);
+  });
+
+  it('uses sessionId as session.id even when incoming session has a different id', async () => {
+    const opts = createTestOptions({
+      session: { id: 'different-id', title: 'Test' },
+    });
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    expect(writtenData.session.id).toBe('test-session-001');
+  });
+
+  it('works correctly when no session metadata is provided (backward compat)', async () => {
+    const opts = createTestOptions();
+    // No session field — should still work as before
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    expect(writtenData.session.id).toBe('test-session-001');
+    expect(writtenData.session.updatedAt).toBeDefined();
+  });
 });

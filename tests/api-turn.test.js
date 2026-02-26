@@ -159,6 +159,46 @@ describe('POST /api/turn — request validation', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBeDefined();
   });
+
+  it('returns 400 when sessionId contains path traversal (..)', async () => {
+    const res = await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send({ ...BASE_REQUEST, sessionId: '../../etc' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+  });
+
+  it('returns 400 when sessionId contains forward slash', async () => {
+    const res = await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send({ ...BASE_REQUEST, sessionId: 'sessions/secret' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+  });
+
+  it('returns 400 when sessionId contains backslash', async () => {
+    const res = await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send({ ...BASE_REQUEST, sessionId: 'sessions\\secret' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+  });
+
+  it('returns 400 when sessionId contains encoded path traversal', async () => {
+    const res = await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send({ ...BASE_REQUEST, sessionId: '..%2F..%2Fetc' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -490,6 +530,38 @@ describe('POST /api/turn — orchestrator integration', () => {
 
     const callArgs = runTurn.mock.calls[0][0];
     expect(typeof callArgs.onEvent).toBe('function');
+  });
+
+  it('calls runTurn with session metadata from request body', async () => {
+    runTurn.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'done' });
+      return { personasProcessed: 0, personasSucceeded: 0, personasFailed: 0 };
+    });
+
+    const session = { id: 'test-001', title: 'My Chat', startedAt: '2026-01-01T00:00:00Z', topic: 'Test' };
+    await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send({ ...BASE_REQUEST, sessionId: uniqueSession(), session });
+
+    const callArgs = runTurn.mock.calls[0][0];
+    expect(callArgs.session).toEqual(session);
+  });
+
+  it('defaults session to empty object when not provided', async () => {
+    runTurn.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'done' });
+      return { personasProcessed: 0, personasSucceeded: 0, personasFailed: 0 };
+    });
+
+    const { session: _omit, ...body } = { ...BASE_REQUEST, sessionId: uniqueSession() };
+    await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send(body);
+
+    const callArgs = runTurn.mock.calls[0][0];
+    expect(callArgs.session).toEqual({});
   });
 
   it('uses default model "sonnet" when model is not provided', async () => {
