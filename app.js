@@ -139,7 +139,8 @@ function formatTime(timestampIso) {
 	try {
 		return new Intl.DateTimeFormat([], {
 			hour: "numeric",
-			minute: "2-digit"
+			minute: "2-digit",
+			second: "2-digit"
 		}).format(new Date(timestampIso));
 	} catch {
 		return "";
@@ -786,6 +787,14 @@ async function triggerTurn() {
 		return;
 	}
 
+	// Don't trigger a turn until the user has spoken at least once
+	const hasUserMessage = sessionData.messages?.some(m =>
+		sessionData.personas?.find(p => p.id === m.speakerId)?.role === "human"
+	);
+	if (!hasUserMessage) {
+		return;
+	}
+
 	// Clear auto-continue timer during the turn — it will be reset on 'done'
 	clearAutoContinueTimer();
 
@@ -803,7 +812,7 @@ async function triggerTurn() {
 				messages: sessionData.messages,
 				notes: sessionData.notes?.content || "",
 				attachedFiles: sessionData.attachedFiles || [],
-				model: modelSelect ? modelSelect.value : "sonnet",
+				model: modelSelect ? modelSelect.value : "haiku",
 				personas: sessionData.personas
 			})
 		});
@@ -1050,8 +1059,8 @@ chatForm.addEventListener("submit", (event) => {
 	saveActiveChat();
 	renderMessages();
 	renderJsonPreview();
-	// Reset auto-continue timer after user sends a message
-	resetAutoContinueTimer();
+	// Automatically trigger a turn after the user speaks
+	triggerTurn();
 });
 
 notesEditor.addEventListener("input", () => {

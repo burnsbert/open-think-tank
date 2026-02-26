@@ -5,6 +5,7 @@ import { readMonologue } from './lib/persistence.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
+const MAX_ROUND2_PERSONAS = 2;
 
 // CORS middleware - allow localhost:8080 only
 app.use(cors({
@@ -126,16 +127,66 @@ app.post('/api/turn', async (req, res) => {
   }
 
   try {
-    await runTurn({
+    const workingMessages = [...messages]; // mutable round state
+    let workingNotes = notes || '';
+    let workingSummary = null;
+
+    const round1Result = await runTurn({
       sessionId,
       session: session || {},
-      messages: [...messages], // shallow copy to avoid mutating caller's array
-      notes: notes || '',
+      messages: workingMessages,
+      notes: workingNotes,
       attachedFiles: attachedFiles || [],
       personas: personas || [],
-      model: model || 'sonnet',
-      onEvent,
+      contextSummary: workingSummary,
+      roundNumber: 1,
+      totalRounds: 2,
+      model: model || 'haiku',
+      onEvent: (event) => {
+        if (event.type === 'done') return;
+        onEvent(event);
+      },
     });
+
+    if (round1Result?.updatedNotes != null) {
+      workingNotes = round1Result.updatedNotes;
+    }
+    if (round1Result?.contextSummary) {
+      workingSummary = round1Result.contextSummary;
+    }
+
+    const requestedRound2 = (round1Result?.round2RequestedPersonaIds || []).slice(0, MAX_ROUND2_PERSONAS);
+
+    if (requestedRound2.length > 0) {
+      const turnResult = await runTurn({
+        sessionId,
+        session: session || {},
+        messages: workingMessages,
+        notes: workingNotes,
+        attachedFiles: attachedFiles || [],
+        personas: personas || [],
+        contextSummary: workingSummary,
+        runPersonaIds: requestedRound2,
+        roundNumber: 2,
+        totalRounds: 2,
+        model: model || 'haiku',
+        onEvent: (event) => {
+          // Collapse internal per-round done events into one final done event.
+          if (event.type === 'done') return;
+          onEvent(event);
+        },
+      });
+
+      if (turnResult?.updatedNotes != null) {
+        workingNotes = turnResult.updatedNotes;
+      }
+      if (turnResult?.contextSummary) {
+        workingSummary = turnResult.contextSummary;
+      }
+    }
+
+    // Ensure exactly one final done event for the full user-triggered turn.
+    writeSseEvent('done', {});
   } catch (err) {
     console.error(`[server] POST /api/turn error for session ${sessionId}: ${err.message}`);
     // If response not yet ended, write error and end

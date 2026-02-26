@@ -55,16 +55,9 @@ function createNewChatData(chatId, title) {
 			{ id: "user", name: "You", displayName: "You", role: "human", avatar: "./avatars/user.png", avatarPosition: "50% 44%", avatarScale: 1.2, prioritizes: ["shipping quickly", "clear decisions"] }
 		],
 		notes: {
-			content: "## Session Goals\n- "
+			content: ""
 		},
-		messages: [
-			{
-				id: `msg-${Date.now()}`,
-				speakerId: "julia",
-				timestamp: now,
-				text: "What does success look like for this new session?"
-			}
-		]
+		messages: []
 	};
 }
 

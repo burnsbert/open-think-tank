@@ -3,6 +3,11 @@
 /.maestro/
 /.stories/
 
+# Runtime data
+data/
+chats/debug-*/
+chats/local-*/
+
 # Dependencies
 node_modules/
 

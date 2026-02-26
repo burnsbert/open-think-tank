@@ -119,11 +119,14 @@ function createMockExecCommand(responseMap = {}, options = {}) {
 
 /**
  * Create a mock buildPrompt function.
- * Returns a predictable prompt string based on personaId.
+ * Returns a predictable { systemPrompt, userPrompt } based on personaId.
  */
 function createMockBuildPrompt() {
   return vi.fn(async ({ personaId, systemPromptPath }) => {
-    return `Mock prompt for ${personaId} using ${systemPromptPath}`;
+    return {
+      systemPrompt: `Mock system prompt for ${personaId}`,
+      userPrompt: `Mock user prompt for ${personaId} using ${systemPromptPath}`,
+    };
   });
 }
 
@@ -170,7 +173,7 @@ function createTestOptions(overrides = {}) {
     notes: 'Initial session notes.',
     attachedFiles: [],
     personas: PERSONAS,
-    model: 'sonnet',
+    model: 'haiku',
     onEvent: createMockOnEvent(),
     execCommand: createMockExecCommand(responseMap),
     buildPrompt: createMockBuildPrompt(),
@@ -250,7 +253,7 @@ describe('runTurn — persona ordering', () => {
       const callOrder = [];
       const mockBuild = vi.fn(async ({ personaId }) => {
         callOrder.push(personaId);
-        return `Prompt for ${personaId}`;
+        return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
       });
       const opts = createTestOptions({
         buildPrompt: mockBuild,
@@ -270,7 +273,7 @@ describe('runTurn — persona ordering', () => {
     const callOrder = [];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       buildPrompt: mockBuild,
@@ -288,7 +291,7 @@ describe('runTurn — persona ordering', () => {
     const callOrder = [];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       buildPrompt: mockBuild,
@@ -309,7 +312,7 @@ describe('runTurn — persona ordering', () => {
     ];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       personas: customPersonas,
@@ -327,7 +330,7 @@ describe('runTurn — persona ordering', () => {
     const callOrder = [];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       buildPrompt: mockBuild,
@@ -347,7 +350,7 @@ describe('runTurn — persona ordering', () => {
     const callOrder = [];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       buildPrompt: mockBuild,
@@ -374,7 +377,7 @@ describe('runTurn — persona ordering', () => {
     const callOrder = [];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       buildPrompt: mockBuild,
@@ -473,14 +476,97 @@ describe('runTurn — speak action', () => {
     expect(blakeEvent.action).toBe('speak');
   });
 
-  it('makes earlier speak messages visible to later personas', async () => {
-    // Blake speaks first, then Yui should see Blake's message in the prompt
+  it('truncates overlong speak text and queues overflow in monologue', async () => {
+    const longText = 'A'.repeat(1200);
+    const opts = createTestOptions({
+      responseMap: {
+        blake: createSpeakResponse(longText),
+        yui: createThinkResponse('...'),
+        grant: createThinkResponse('...'),
+        julia: createThinkResponse('...'),
+      },
+    });
+
+    await runTurn(opts);
+
+    const blakeMessage = opts.messages.find(m => m.speakerId === 'blake');
+    expect(blakeMessage).toBeDefined();
+    expect(blakeMessage.text.length).toBeLessThanOrEqual(520);
+
+    const overflowCall = opts.persistence.appendMonologue.mock.calls.find(
+      call => call[1] === 'blake'
+        && call[2]?.type === 'think'
+        && typeof call[2]?.text === 'string'
+        && call[2].text.includes('Speak overflow queued for later:')
+    );
+    expect(overflowCall).toBeDefined();
+    expect(overflowCall[2].text.length).toBeGreaterThan(0);
+  });
+
+  it('caps simple-intent speak output to two sentences by default', async () => {
+    const text = 'Sentence one. Sentence two. Sentence three.';
+    const opts = createTestOptions({
+      messages: [
+        { id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: 'hello' },
+      ],
+      responseMap: {
+        blake: createSpeakResponse(text),
+        yui: createThinkResponse('...'),
+        grant: createThinkResponse('...'),
+        julia: createThinkResponse('...'),
+      },
+    });
+
+    await runTurn(opts);
+
+    const blakeMessage = opts.messages.find(m => m.speakerId === 'blake');
+    expect(blakeMessage).toBeDefined();
+    expect(blakeMessage.text).toContain('Sentence one.');
+    const sentenceCount = blakeMessage.text.split(/(?<=[.!?])\s+/).filter(Boolean).length;
+    expect(sentenceCount).toBeLessThanOrEqual(2);
+
+    const overflowCall = opts.persistence.appendMonologue.mock.calls.find(
+      call => call[1] === 'blake'
+        && call[2]?.type === 'think'
+        && call[2].text.includes('Sentence three.')
+    );
+    expect(overflowCall).toBeDefined();
+  });
+
+  it('limits simple round-1 speaking to two personas when running multi-round mode', async () => {
+    const opts = createTestOptions({
+      messages: [
+        { id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: 'hello' },
+      ],
+      responseMap: {
+        blake: createSpeakResponse('Blake short reply.'),
+        yui: createSpeakResponse('Yui short reply.'),
+        grant: createSpeakResponse('Grant short reply.'),
+        julia: createSpeakResponse('Julia short reply.'),
+      },
+      roundNumber: 1,
+      totalRounds: 2,
+    });
+
+    const result = await runTurn(opts);
+    const speakEvents = opts.onEvent.events.filter((e) => e.type === 'message' && e.action === 'speak');
+    const thinkEvents = opts.onEvent.events.filter((e) => e.type === 'message' && e.action === 'think');
+
+    expect(result.messagesAdded).toBe(2);
+    expect(speakEvents).toHaveLength(2);
+    expect(thinkEvents.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('uses a round-start snapshot for all persona prompts in parallel mode', async () => {
     const callOrder = [];
     const promptMessages = {};
     const mockBuild = vi.fn(async ({ personaId, messages }) => {
       callOrder.push(personaId);
       promptMessages[personaId] = [...messages];
-      return `Prompt for ${personaId}`;
+      return {
+        systemPrompt: `System prompt for ${personaId}`,
+        userPrompt: `User prompt for ${personaId}`,
+      };
     });
 
     // Force order: blake first
@@ -501,12 +587,15 @@ describe('runTurn — speak action', () => {
     // Blake goes first (mentioned)
     expect(callOrder[0]).toBe('blake');
 
-    // The second persona should have blake's message in their messages array
-    const secondPersona = callOrder[1];
-    const secondMessages = promptMessages[secondPersona];
-    const blakeMsg = secondMessages.find(m => m.speakerId === 'blake');
-    expect(blakeMsg).toBeDefined();
-    expect(blakeMsg.text).toBe('Blake speaks first');
+    // In parallel mode all personas get the same round-start snapshot.
+    // No prompt should include messages generated during this same round.
+    for (const personaId of callOrder) {
+      const personaMessages = promptMessages[personaId];
+      const blakeMsg = personaMessages.find(m => m.speakerId === 'blake');
+      expect(blakeMsg).toBeUndefined();
+      expect(personaMessages).toHaveLength(1);
+      expect(personaMessages[0].speakerId).toBe('user');
+    }
   });
 });
 
@@ -728,7 +817,7 @@ describe('runTurn — event emission', () => {
     expect(lastEvent.type).toBe('done');
   });
 
-  it('events are emitted in order: thinking, message, [notes], ... thinking, message, ... done', async () => {
+  it('emits all thinking events first, then message events, then done', async () => {
     const opts = createTestOptions({
       responseMap: {
         blake: createSpeakResponse('Blake speaks'),
@@ -740,16 +829,10 @@ describe('runTurn — event emission', () => {
     await runTurn(opts);
 
     const events = opts.onEvent.events;
-    // Should be: thinking, message, thinking, message, ... done
-    // Each persona gets thinking then message
-    let i = 0;
-    while (i < events.length - 1) {
-      expect(events[i].type).toBe('thinking');
-      i++;
-      expect(events[i].type).toBe('message');
-      i++;
-    }
-    expect(events[events.length - 1].type).toBe('done');
+    expect(events).toHaveLength(9);
+    expect(events.slice(0, 4).every(e => e.type === 'thinking')).toBe(true);
+    expect(events.slice(4, 8).every(e => e.type === 'message')).toBe(true);
+    expect(events[8].type).toBe('done');
   });
 
   it('message events include the full message object for speak actions', async () => {
@@ -778,6 +861,93 @@ describe('runTurn — event emission', () => {
 // ---------------------------------------------------------------------------
 
 describe('runTurn — error handling', () => {
+  it('retries once when claude returns empty result envelope', async () => {
+    const opts = createTestOptions();
+
+    opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
+      const systemPromptIdx = args.indexOf('--system-prompt');
+      const systemPrompt = systemPromptIdx >= 0 ? args[systemPromptIdx + 1] : '';
+
+      // Only force Blake to fail first parse attempt.
+      if (systemPrompt.includes('blake') && !opts.execCommand._blakeRetried) {
+        opts.execCommand._blakeRetried = true;
+        const emptyEnvelope = {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: '',
+          session_id: 'test-empty-result',
+          duration_ms: 1000,
+        };
+        process.nextTick(() => cb(null, JSON.stringify(emptyEnvelope), ''));
+        return;
+      }
+
+      const envelope = {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: JSON.stringify(createSpeakResponse('Recovered response')),
+        session_id: 'test',
+        duration_ms: 100,
+      };
+      process.nextTick(() => cb(null, JSON.stringify(envelope), ''));
+    });
+
+    await runTurn(opts);
+
+    // One extra call for Blake retry: 4 personas + 1 retry
+    expect(opts.execCommand.mock.calls.length).toBe(5);
+    const errorEvents = opts.onEvent.events.filter(e => e.type === 'error');
+    expect(errorEvents).toHaveLength(0);
+    const doneEvents = opts.onEvent.events.filter(e => e.type === 'done');
+    expect(doneEvents).toHaveLength(1);
+  });
+
+  it('uses a last-chance minimal third attempt after two empty envelopes', async () => {
+    const opts = createTestOptions();
+
+    let blakeAttempts = 0;
+    opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
+      const systemPromptIdx = args.indexOf('--system-prompt');
+      const systemPrompt = systemPromptIdx >= 0 ? args[systemPromptIdx + 1] : '';
+
+      if (systemPrompt.includes('blake')) {
+        blakeAttempts++;
+        if (blakeAttempts <= 2) {
+          const emptyEnvelope = {
+            type: 'result',
+            subtype: 'success',
+            is_error: false,
+            result: '',
+            session_id: 'test-empty-result',
+            duration_ms: 1000,
+          };
+          process.nextTick(() => cb(null, JSON.stringify(emptyEnvelope), ''));
+          return;
+        }
+      }
+
+      const envelope = {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: JSON.stringify(createSpeakResponse('Recovered on third attempt')),
+        session_id: 'test',
+        duration_ms: 100,
+      };
+      process.nextTick(() => cb(null, JSON.stringify(envelope), ''));
+    });
+
+    await runTurn(opts);
+
+    expect(blakeAttempts).toBe(3);
+    const errorEvents = opts.onEvent.events.filter(e => e.type === 'error');
+    expect(errorEvents).toHaveLength(0);
+    const doneEvents = opts.onEvent.events.filter(e => e.type === 'done');
+    expect(doneEvents).toHaveLength(1);
+  });
+
   it('continues the round when a persona fails', async () => {
     const opts = createTestOptions({
       responseMap: {
@@ -1119,7 +1289,7 @@ describe('runTurn — claude command construction', () => {
     }
   });
 
-  it('defaults model to "sonnet" when not specified', async () => {
+  it('defaults model to "haiku" when not specified', async () => {
     const opts = createTestOptions();
     delete opts.model;
     await runTurn(opts);
@@ -1128,32 +1298,29 @@ describe('runTurn — claude command construction', () => {
       const args = call[1];
       const modelIdx = args.indexOf('--model');
       expect(modelIdx).toBeGreaterThanOrEqual(0);
-      expect(args[modelIdx + 1]).toBe('sonnet');
+      expect(args[modelIdx + 1]).toBe('haiku');
     }
   });
 
-  it('includes --allowedTools with appropriate tools', async () => {
+  it('enables specific tools via --tools flag', async () => {
     const opts = createTestOptions();
     await runTurn(opts);
 
     for (const call of opts.execCommand.mock.calls) {
       const args = call[1];
-      expect(args).toContain('--allowedTools');
-      const toolsIdx = args.indexOf('--allowedTools');
-      const toolsValue = args[toolsIdx + 1];
-      expect(toolsValue).toContain('Read');
+      expect(args).toContain('--tools');
+      const toolsIdx = args.indexOf('--tools');
+      expect(args[toolsIdx + 1]).toBe('Read,WebSearch,WebFetch,Glob,Grep');
     }
   });
 
-  it('includes permission bypass flags', async () => {
+  it('passes --system-prompt as separate arg', async () => {
     const opts = createTestOptions();
     await runTurn(opts);
 
     for (const call of opts.execCommand.mock.calls) {
       const args = call[1];
-      const argsStr = args.join(' ');
-      // Should include some form of permission bypass
-      expect(argsStr).toMatch(/--permission-mode|bypassPermissions/);
+      expect(args).toContain('--system-prompt');
     }
   });
 });
@@ -1310,7 +1477,7 @@ describe('runTurn — edge cases', () => {
     const callOrder = [];
     const mockBuild = vi.fn(async ({ personaId }) => {
       callOrder.push(personaId);
-      return `Prompt for ${personaId}`;
+      return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
     });
     const opts = createTestOptions({
       buildPrompt: mockBuild,
@@ -1325,7 +1492,7 @@ describe('runTurn — edge cases', () => {
       const order = [];
       opts.buildPrompt = vi.fn(async ({ personaId }) => {
         order.push(personaId);
-        return `Prompt for ${personaId}`;
+        return { systemPrompt: `System for ${personaId}`, userPrompt: `User prompt for ${personaId}` };
       });
       await runTurn(opts);
       firstPersonas.add(order[0]);

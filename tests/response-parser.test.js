@@ -232,6 +232,36 @@ describe('speak action', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
   });
+
+  it('parses optional round-2 request metadata on speak', async () => {
+    const speakAction = {
+      action: 'speak',
+      text: 'Short response',
+      wantRound2: true,
+      round2Reason: 'Need one follow-up to resolve disagreement',
+    };
+    const claudeOutput = wrapInClaudeEnvelope(speakAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(true);
+    expect(result.data.wantRound2).toBe(true);
+    expect(result.data.round2Reason).toContain('follow-up');
+  });
+
+  it('returns error when wantRound2 is non-boolean', async () => {
+    const speakAction = {
+      action: 'speak',
+      text: 'Hello',
+      wantRound2: 'yes',
+    };
+    const claudeOutput = wrapInClaudeEnvelope(speakAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/wantRound2/);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -424,6 +424,40 @@ describe('POST /api/turn — SSE event format', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/turn — orchestrator integration', () => {
+  it('runs a second round only for first two personas requesting it', async () => {
+    runTurn
+      .mockImplementationOnce(async ({ onEvent }) => {
+        onEvent({ type: 'thinking', personaId: 'blake', personaName: 'Blake' });
+        onEvent({ type: 'message', personaId: 'blake', message: { text: 'r1' }, action: 'speak' });
+        onEvent({ type: 'done' });
+        return {
+          personasProcessed: 4,
+          personasSucceeded: 4,
+          personasFailed: 0,
+          updatedNotes: '',
+          contextSummary: null,
+          round2RequestedPersonaIds: ['grant', 'yui', 'julia'],
+        };
+      })
+      .mockImplementationOnce(async ({ onEvent }) => {
+        onEvent({ type: 'thinking', personaId: 'grant', personaName: 'Grant' });
+        onEvent({ type: 'message', personaId: 'grant', message: { text: 'r2' }, action: 'speak' });
+        onEvent({ type: 'done' });
+        return { personasProcessed: 2, personasSucceeded: 2, personasFailed: 0 };
+      });
+
+    await request(app)
+      .post('/api/turn')
+      .set('Content-Type', 'application/json')
+      .send({ ...BASE_REQUEST, sessionId: uniqueSession() });
+
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    const secondCallArgs = runTurn.mock.calls[1][0];
+    expect(secondCallArgs.runPersonaIds).toEqual(['grant', 'yui']);
+    expect(secondCallArgs.roundNumber).toBe(2);
+    expect(secondCallArgs.totalRounds).toBe(2);
+  });
+
   it('calls runTurn with sessionId from request body', async () => {
     runTurn.mockImplementation(async ({ onEvent }) => {
       onEvent({ type: 'done' });
@@ -564,7 +598,7 @@ describe('POST /api/turn — orchestrator integration', () => {
     expect(callArgs.session).toEqual({});
   });
 
-  it('uses default model "sonnet" when model is not provided', async () => {
+  it('uses default model "haiku" when model is not provided', async () => {
     runTurn.mockImplementation(async ({ onEvent }) => {
       onEvent({ type: 'done' });
       return { personasProcessed: 0, personasSucceeded: 0, personasFailed: 0 };
@@ -577,7 +611,7 @@ describe('POST /api/turn — orchestrator integration', () => {
       .send(bodyWithoutModel);
 
     const callArgs = runTurn.mock.calls[0][0];
-    expect(callArgs.model).toBe('sonnet');
+    expect(callArgs.model).toBe('haiku');
   });
 });
 

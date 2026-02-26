@@ -562,6 +562,10 @@ h1 {
 	overflow: hidden;
 }
 
+.workspace > .panel {
+	min-width: 0;
+}
+
 /* ============================================================
    CHAT LIST
    ============================================================ */
@@ -614,6 +618,7 @@ h1 {
 	border: 1px solid var(--bubble-border);
 	border-radius: var(--radius-lg);
 	padding: 10px 14px;
+	min-width: 0;
 	transition:
 		background-color 220ms ease,
 		border-color 220ms ease;
@@ -642,6 +647,8 @@ h1 {
 	font-size: 14px;
 	line-height: 1.55;
 	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-word;
 	color: var(--text);
 }
 
@@ -967,6 +974,7 @@ h1 {
 .notes-editor {
 	flex: 1;
 	min-height: 300px;
+	min-width: 0;
 	margin: 14px;
 }
 

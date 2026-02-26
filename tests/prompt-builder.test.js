@@ -90,9 +90,15 @@ async function writeTempSystemMd(content = SYSTEM_CONTENT) {
 // Test Suite
 // ---------------------------------------------------------------------------
 
+// Helper: buildPrompt now returns { systemPrompt, userPrompt }.
+// For tests that check combined content, merge them back.
+function combined(result) {
+  return result.systemPrompt + '\n\n' + result.userPrompt;
+}
+
 describe('buildPrompt', () => {
   describe('return type and basic structure', () => {
-    it('should return a non-empty string', async () => {
+    it('should return an object with systemPrompt and userPrompt strings', async () => {
       const { filePath } = await writeTempSystemMd();
       const result = await buildPrompt({
         personaId: 'blake',
@@ -103,11 +109,14 @@ describe('buildPrompt', () => {
         attachedFiles: ATTACHED_FILES,
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
-      expect(result.length).toBeGreaterThan(0);
+      expect(typeof result).toBe('object');
+      expect(typeof result.systemPrompt).toBe('string');
+      expect(typeof result.userPrompt).toBe('string');
+      expect(result.systemPrompt.length).toBeGreaterThan(0);
+      expect(result.userPrompt.length).toBeGreaterThan(0);
     });
 
-    it('should include the system.md content', async () => {
+    it('should include the system.md content in systemPrompt', async () => {
       const { filePath } = await writeTempSystemMd();
       const result = await buildPrompt({
         personaId: 'blake',
@@ -118,7 +127,7 @@ describe('buildPrompt', () => {
         attachedFiles: ATTACHED_FILES,
         personas: PERSONAS,
       });
-      expect(result).toContain(SYSTEM_CONTENT);
+      expect(result.systemPrompt).toContain(SYSTEM_CONTENT);
     });
   });
 
@@ -134,7 +143,7 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toMatch(/conversation history/i);
+      expect(result.userPrompt).toMatch(/conversation history/i);
     });
 
     it('should include each message text in the prompt', async () => {
@@ -148,9 +157,9 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('What should we build next?');
-      expect(result).toContain('I think we should focus on the API layer first.');
-      expect(result).toContain('I agree, but let us not forget the UX.');
+      expect(result.userPrompt).toContain('What should we build next?');
+      expect(result.userPrompt).toContain('I think we should focus on the API layer first.');
+      expect(result.userPrompt).toContain('I agree, but let us not forget the UX.');
     });
 
     it('should include speaker display names for attribution', async () => {
@@ -165,11 +174,11 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
       // The user message should attribute to the user persona's display name
-      expect(result).toContain('You');
+      expect(result.userPrompt).toContain('You');
       // Blake's message should be attributed to Blake
-      expect(result).toContain('Blake');
+      expect(result.userPrompt).toContain('Blake');
       // Yui's message should be attributed to Yui
-      expect(result).toContain('Yui');
+      expect(result.userPrompt).toContain('Yui');
     });
 
     it('should preserve chronological order of messages', async () => {
@@ -183,9 +192,9 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      const pos1 = result.indexOf('What should we build next?');
-      const pos2 = result.indexOf('I think we should focus on the API layer first.');
-      const pos3 = result.indexOf('I agree, but let us not forget the UX.');
+      const pos1 = result.userPrompt.indexOf('What should we build next?');
+      const pos2 = result.userPrompt.indexOf('I think we should focus on the API layer first.');
+      const pos3 = result.userPrompt.indexOf('I agree, but let us not forget the UX.');
       expect(pos1).toBeGreaterThan(-1);
       expect(pos2).toBeGreaterThan(pos1);
       expect(pos3).toBeGreaterThan(pos2);
@@ -202,8 +211,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
-      expect(result.length).toBeGreaterThan(0);
+      expect(typeof result).toBe('object');
+      expect(result.userPrompt.length).toBeGreaterThan(0);
     });
 
     it('should handle a single message in history', async () => {
@@ -218,7 +227,7 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('What should we build next?');
+      expect(result.userPrompt).toContain('What should we build next?');
     });
 
     it('should use persona displayName when speakerId matches a known persona', async () => {
@@ -235,7 +244,7 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('Grant');
+      expect(result.userPrompt).toContain('Grant');
     });
 
     it('should fall back to speakerId when persona displayName is not found', async () => {
@@ -252,8 +261,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('unknown-bot');
-      expect(result).toContain('Mystery message.');
+      expect(result.userPrompt).toContain('unknown-bot');
+      expect(result.userPrompt).toContain('Mystery message.');
     });
   });
 
@@ -269,7 +278,7 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toMatch(/your (internal )?monologue|your thoughts/i);
+      expect(result.userPrompt).toMatch(/your (internal )?monologue|your thoughts/i);
     });
 
     it('should include monologue entry text', async () => {
@@ -283,8 +292,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('User seems keen to move fast.');
-      expect(result).toContain('My suggestion landed well.');
+      expect(result.userPrompt).toContain('User seems keen to move fast.');
+      expect(result.userPrompt).toContain('My suggestion landed well.');
     });
 
     it('should include timestamps in monologue entries', async () => {
@@ -299,7 +308,7 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
       // At least one timestamp should appear in the prompt
-      expect(result).toContain('2026-02-25');
+      expect(result.userPrompt).toContain('2026-02-25');
     });
 
     it('should handle empty monologue gracefully (first turn)', async () => {
@@ -313,10 +322,10 @@ describe('buildPrompt', () => {
         attachedFiles: ATTACHED_FILES,
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe('object');
       // Should not contain stray "undefined" or "null"
-      expect(result).not.toContain('undefined');
-      expect(result).not.toContain('null');
+      expect(result.userPrompt).not.toContain('undefined');
+      expect(result.userPrompt).not.toContain('null');
     });
 
     it('should handle a single monologue entry', async () => {
@@ -331,7 +340,7 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('User seems keen to move fast.');
+      expect(result.userPrompt).toContain('User seems keen to move fast.');
     });
 
     it('should include the type of monologue entry', async () => {
@@ -349,8 +358,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('Silent thought.');
-      expect(result).toContain('Found useful info.');
+      expect(result.userPrompt).toContain('Silent thought.');
+      expect(result.userPrompt).toContain('Found useful info.');
     });
   });
 
@@ -366,7 +375,7 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toMatch(/session notes/i);
+      expect(result.userPrompt).toMatch(/session notes/i);
     });
 
     it('should include the notes content', async () => {
@@ -380,8 +389,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('Decision: API layer first.');
-      expect(result).toContain('Follow-up needed on UX.');
+      expect(result.userPrompt).toContain('Decision: API layer first.');
+      expect(result.userPrompt).toContain('Follow-up needed on UX.');
     });
 
     it('should handle empty notes gracefully', async () => {
@@ -395,9 +404,9 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
-      expect(result).not.toContain('undefined');
-      expect(result).not.toContain('null');
+      expect(typeof result).toBe('object');
+      expect(result.userPrompt).not.toContain('undefined');
+      expect(result.userPrompt).not.toContain('null');
     });
 
     it('should handle whitespace-only notes as empty', async () => {
@@ -411,9 +420,9 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe('object');
       // Whitespace-only notes should not inject garbage into the prompt
-      expect(result).not.toMatch(/\bnull\b/);
+      expect(result.userPrompt).not.toMatch(/\bnull\b/);
     });
 
     it('should handle multi-line notes', async () => {
@@ -428,9 +437,9 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(result).toContain('Line one');
-      expect(result).toContain('Line two');
-      expect(result).toContain('Line three');
+      expect(result.userPrompt).toContain('Line one');
+      expect(result.userPrompt).toContain('Line two');
+      expect(result.userPrompt).toContain('Line three');
     });
   });
 
@@ -446,7 +455,7 @@ describe('buildPrompt', () => {
         attachedFiles: ATTACHED_FILES,
         personas: PERSONAS,
       });
-      expect(result).toMatch(/attached files/i);
+      expect(result.userPrompt).toMatch(/attached files/i);
     });
 
     it('should list attached filenames', async () => {
@@ -460,8 +469,8 @@ describe('buildPrompt', () => {
         attachedFiles: ATTACHED_FILES,
         personas: PERSONAS,
       });
-      expect(result).toContain('spec.md');
-      expect(result).toContain('design.png');
+      expect(result.userPrompt).toContain('spec.md');
+      expect(result.userPrompt).toContain('design.png');
     });
 
     it('should NOT include file contents in the prompt', async () => {
@@ -478,7 +487,7 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
       // Filename should appear, but the function should not attempt to read file contents
-      expect(result).toContain('spec.md');
+      expect(result.userPrompt).toContain('spec.md');
     });
 
     it('should handle empty attached files list gracefully', async () => {
@@ -492,8 +501,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
-      expect(result).not.toContain('undefined');
+      expect(typeof result).toBe('object');
+      expect(result.userPrompt).not.toContain('undefined');
     });
 
     it('should handle a single attached file', async () => {
@@ -507,7 +516,7 @@ describe('buildPrompt', () => {
         attachedFiles: ['requirements.md'],
         personas: PERSONAS,
       });
-      expect(result).toContain('requirements.md');
+      expect(result.userPrompt).toContain('requirements.md');
     });
 
     it('should handle many attached files', async () => {
@@ -523,7 +532,7 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
       for (const file of manyFiles) {
-        expect(result).toContain(file);
+        expect(result.userPrompt).toContain(file);
       }
     });
   });
@@ -540,9 +549,9 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe('object');
       // Should still include system content
-      expect(result).toContain(SYSTEM_CONTENT);
+      expect(result.systemPrompt).toContain(SYSTEM_CONTENT);
     });
 
     it('should handle all sections populated together', async () => {
@@ -557,11 +566,11 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
       // All key pieces should be present
-      expect(result).toContain(SYSTEM_CONTENT);
-      expect(result).toContain('What should we build next?');
-      expect(result).toContain('User seems keen to move fast.');
-      expect(result).toContain('Decision: API layer first.');
-      expect(result).toContain('spec.md');
+      expect(result.systemPrompt).toContain(SYSTEM_CONTENT);
+      expect(result.userPrompt).toContain('What should we build next?');
+      expect(result.userPrompt).toContain('User seems keen to move fast.');
+      expect(result.userPrompt).toContain('Decision: API layer first.');
+      expect(result.userPrompt).toContain('spec.md');
     });
 
     it('should produce different prompts for different personas given same inputs', async () => {
@@ -588,9 +597,9 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
 
-      expect(blakePrompt).not.toBe(yuiPrompt);
-      expect(blakePrompt).toContain('You are Blake.');
-      expect(yuiPrompt).toContain('You are Yui.');
+      expect(blakePrompt).not.toEqual(yuiPrompt);
+      expect(blakePrompt.systemPrompt).toContain('You are Blake.');
+      expect(yuiPrompt.systemPrompt).toContain('You are Yui.');
     });
 
     it('should throw or reject when system prompt file does not exist', async () => {
@@ -626,8 +635,8 @@ describe('buildPrompt', () => {
           personas: PERSONAS,
           ...inputs,
         });
-        expect(result).not.toContain('undefined');
-        expect(result).not.toContain('null');
+        expect(result.userPrompt).not.toContain('undefined');
+        expect(result.userPrompt).not.toContain('null');
       }
     });
 
@@ -650,14 +659,14 @@ describe('buildPrompt', () => {
         personas: PERSONAS,
       });
 
-      expect(typeof result).toBe('string');
-      expect(result).toContain('Message number 0');
-      expect(result).toContain('Message number 99');
+      expect(typeof result).toBe('object');
+      expect(result.userPrompt).toContain('Message number 0');
+      expect(result.userPrompt).toContain('Message number 99');
     });
   });
 
   describe('section ordering', () => {
-    it('should have system content before conversation history', async () => {
+    it('should have system content separate from user prompt', async () => {
       const { filePath } = await writeTempSystemMd();
       const result = await buildPrompt({
         personaId: 'blake',
@@ -668,14 +677,12 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      const systemPos = result.indexOf(SYSTEM_CONTENT);
-      const historyPos = result.search(/conversation history/i);
-      expect(systemPos).toBeGreaterThan(-1);
-      expect(historyPos).toBeGreaterThan(-1);
-      expect(systemPos).toBeLessThan(historyPos);
+      // System content is in systemPrompt, not userPrompt
+      expect(result.systemPrompt).toContain(SYSTEM_CONTENT);
+      expect(result.userPrompt).toMatch(/conversation history/i);
     });
 
-    it('should have conversation history before monologue', async () => {
+    it('should have conversation history before monologue in userPrompt', async () => {
       const { filePath } = await writeTempSystemMd();
       const result = await buildPrompt({
         personaId: 'blake',
@@ -686,8 +693,8 @@ describe('buildPrompt', () => {
         attachedFiles: [],
         personas: PERSONAS,
       });
-      const historyPos = result.search(/conversation history/i);
-      const monologuePos = result.search(/your (internal )?monologue|your thoughts/i);
+      const historyPos = result.userPrompt.search(/conversation history/i);
+      const monologuePos = result.userPrompt.search(/your (internal )?monologue|your thoughts/i);
       expect(historyPos).toBeGreaterThan(-1);
       expect(monologuePos).toBeGreaterThan(-1);
       expect(historyPos).toBeLessThan(monologuePos);
