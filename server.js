@@ -1,11 +1,60 @@
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const APP_VERSION = (() => {
+	try {
+		const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8'));
+		return pkg?.version || 'unknown';
+	} catch {
+		return 'unknown';
+	}
+})();
+const APP_BOOT_ID = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+const APP_DISPLAY_VERSION = `${APP_VERSION}-dev.${APP_BOOT_ID}`;
+const OTT_DEBUG = String(process.env.OTT_DEBUG || 'true').toLowerCase() === 'true';
+
+function debugLog(message, extra = null) {
+	if (!OTT_DEBUG) return;
+	if (extra == null) {
+		console.log(`-=-= [server] ${message}`);
+		return;
+	}
+	console.log(`-=-= [server] ${message}`, extra);
+}
+
+(function loadDotEnv() {
+	try {
+		const lines = readFileSync(join(__dirname, '.env'), 'utf8').split('\n');
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith('#')) continue;
+			const eqIdx = trimmed.indexOf('=');
+			if (eqIdx < 1) continue;
+			const key = trimmed.slice(0, eqIdx).trim();
+			const value = trimmed.slice(eqIdx + 1).trim();
+			if (!(key in process.env)) {
+				process.env[key] = value;
+			}
+		}
+	} catch {
+		// .env file missing or unreadable — continue with existing env
+	}
+})();
+
 import express from 'express';
 import cors from 'cors';
-import { runTurn } from './lib/turn-orchestrator.js';
-import { readMonologue } from './lib/persistence.js';
+import { runSupervisorTurn } from './lib/supervisor-orchestrator.js';
+import {
+	readMonologue,
+	readSessionStatuses,
+	readSessionChat,
+	readTurnState,
+} from './lib/persistence.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
-const MAX_ROUND2_PERSONAS = 2;
 
 // CORS middleware - allow localhost:8080 only
 app.use(cors({
@@ -42,167 +91,63 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/api/version', (req, res) => {
+	res.setHeader('Cache-Control', 'no-store');
+	res.json({
+		version: APP_VERSION,
+		displayVersion: APP_DISPLAY_VERSION,
+		bootId: APP_BOOT_ID,
+	});
+});
+
 // POST /api/turn — run a full turn (round) of persona responses via SSE
 app.post('/api/turn', async (req, res) => {
-  const { sessionId, session, messages, notes, attachedFiles, model, personas } = req.body || {};
+	const { sessionId, session, messages, notes, attachedFiles, model, personas } = req.body || {};
+	const requestStartedMs = Date.now();
 
-  // Validate required fields
-  if (!sessionId || typeof sessionId !== 'string' || sessionId.trim() === '') {
-    return res.status(400).json({ error: 'sessionId is required' });
-  }
-  if (!isValidPathSegment(sessionId)) {
-    return res.status(400).json({ error: 'sessionId contains invalid characters' });
-  }
-  if (!messages || !Array.isArray(messages)) {
-    return res.status(400).json({ error: 'messages must be an array' });
-  }
+	if (!sessionId || typeof sessionId !== 'string' || sessionId.trim() === '') {
+		return res.status(400).json({ error: 'sessionId is required' });
+	}
+	if (!isValidPathSegment(sessionId)) {
+		return res.status(400).json({ error: 'sessionId contains invalid characters' });
+	}
+	if (!messages || !Array.isArray(messages)) {
+		return res.status(400).json({ error: 'messages must be an array' });
+	}
+	if (activeSessions.has(sessionId)) {
+		debugLog(`reject concurrent turn sessionId=${sessionId}`);
+		return res.status(409).json({ error: 'Turn already in progress' });
+	}
 
-  // Check for concurrent turn on the same session
-  if (activeSessions.has(sessionId)) {
-    return res.status(409).json({ error: 'Turn already in progress' });
-  }
+	activeSessions.add(sessionId);
+	debugLog(`accepted turn sessionId=${sessionId} personas=${Array.isArray(personas) ? personas.length : 0}`);
+	const payload = {
+		sessionId,
+		session: session || {},
+		messages: [...messages],
+		notes: notes || '',
+		attachedFiles: attachedFiles || [],
+		model: model || 'haiku',
+		personas: personas || [],
+	};
 
-  // Register session as active
-  activeSessions.add(sessionId);
+	(async () => {
+		try {
+			await runSupervisorTurn(payload);
+			debugLog(`background turn done sessionId=${sessionId}`);
+		} catch (err) {
+			console.error(`[server] supervisor turn failed for ${sessionId}: ${err.message}`);
+		} finally {
+			activeSessions.delete(sessionId);
+			debugLog(`session released sessionId=${sessionId}`);
+		}
+	})();
 
-  // Set SSE headers
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  /**
-   * Write a single SSE event to the response.
-   * Format: "event: <type>\ndata: <json>\n\n"
-   *
-   * @param {string} eventType - SSE event name
-   * @param {*} data - Payload (will be JSON-serialized)
-   */
-  function writeSseEvent(eventType, data) {
-    res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
-  }
-
-  /**
-   * Map turn-orchestrator event objects to SSE events.
-   * Event types from orchestrator: thinking, message, notes, done, error
-   */
-  function onEvent(event) {
-    switch (event.type) {
-      case 'thinking':
-        writeSseEvent('thinking', {
-          personaId: event.personaId,
-          personaName: event.personaName,
-        });
-        break;
-
-      case 'message':
-        writeSseEvent('message', {
-          personaId: event.personaId,
-          message: event.message,
-          action: event.action,
-        });
-        break;
-
-      case 'notes':
-        writeSseEvent('notes', {
-          content: event.content,
-        });
-        break;
-
-      case 'done':
-        writeSseEvent('done', {});
-        break;
-
-      case 'error':
-        writeSseEvent('error', {
-          personaId: event.personaId,
-          error: event.error,
-        });
-        break;
-
-      default:
-        // Unknown event type — ignore
-        break;
-    }
-  }
-
-  try {
-    const workingMessages = [...messages]; // mutable round state
-    let workingNotes = notes || '';
-    let workingSummary = null;
-
-    const round1Result = await runTurn({
-      sessionId,
-      session: session || {},
-      messages: workingMessages,
-      notes: workingNotes,
-      attachedFiles: attachedFiles || [],
-      personas: personas || [],
-      contextSummary: workingSummary,
-      roundNumber: 1,
-      totalRounds: 2,
-      model: model || 'haiku',
-      onEvent: (event) => {
-        if (event.type === 'done') return;
-        onEvent(event);
-      },
-    });
-
-    if (round1Result?.updatedNotes != null) {
-      workingNotes = round1Result.updatedNotes;
-    }
-    if (round1Result?.contextSummary) {
-      workingSummary = round1Result.contextSummary;
-    }
-
-    const requestedRound2 = (round1Result?.round2RequestedPersonaIds || []).slice(0, MAX_ROUND2_PERSONAS);
-
-    if (requestedRound2.length > 0) {
-      const turnResult = await runTurn({
-        sessionId,
-        session: session || {},
-        messages: workingMessages,
-        notes: workingNotes,
-        attachedFiles: attachedFiles || [],
-        personas: personas || [],
-        contextSummary: workingSummary,
-        runPersonaIds: requestedRound2,
-        roundNumber: 2,
-        totalRounds: 2,
-        model: model || 'haiku',
-        onEvent: (event) => {
-          // Collapse internal per-round done events into one final done event.
-          if (event.type === 'done') return;
-          onEvent(event);
-        },
-      });
-
-      if (turnResult?.updatedNotes != null) {
-        workingNotes = turnResult.updatedNotes;
-      }
-      if (turnResult?.contextSummary) {
-        workingSummary = turnResult.contextSummary;
-      }
-    }
-
-    // Ensure exactly one final done event for the full user-triggered turn.
-    writeSseEvent('done', {});
-  } catch (err) {
-    console.error(`[server] POST /api/turn error for session ${sessionId}: ${err.message}`);
-    // If response not yet ended, write error and end
-    if (!res.writableEnded) {
-      writeSseEvent('error', { personaId: null, error: err.message || 'Internal server error' });
-      res.end();
-    }
-  } finally {
-    // Always remove session from active set, whether success or error
-    activeSessions.delete(sessionId);
-  }
-
-  // End the SSE stream (if not already ended in catch)
-  if (!res.writableEnded) {
-    res.end();
-  }
+	debugLog(`responding accepted sessionId=${sessionId} latencyMs=${Date.now() - requestStartedMs}`);
+	return res.status(202).json({
+		status: 'accepted',
+		sessionId,
+	});
 });
 
 // GET /api/monologue/:sessionId/:personaId — fetch a persona's monologue entries
@@ -223,14 +168,64 @@ app.get('/api/monologue/:sessionId/:personaId', async (req, res) => {
   }
 });
 
+// GET /api/status/:sessionId — fetch all persona status files for session
+app.get('/api/status/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+
+  if (!isValidPathSegment(sessionId)) {
+    return res.status(400).json({ error: 'Invalid sessionId' });
+  }
+
+  try {
+    const statuses = await readSessionStatuses(sessionId);
+    res.json(statuses);
+  } catch (err) {
+    console.error(`[server] GET /api/status error for ${sessionId}: ${err.message}`);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+app.get('/api/session/:sessionId', async (req, res) => {
+	const { sessionId } = req.params;
+	if (!isValidPathSegment(sessionId)) {
+		return res.status(400).json({ error: 'Invalid sessionId' });
+	}
+
+	try {
+		const sessionData = await readSessionChat(sessionId);
+		if (!sessionData) {
+			return res.status(404).json({ error: 'Session not found' });
+		}
+		return res.json(sessionData);
+	} catch (err) {
+		console.error(`[server] GET /api/session error for ${sessionId}: ${err.message}`);
+		return res.status(500).json({ error: err.message || 'Internal server error' });
+	}
+});
+
+app.get('/api/turn-state/:sessionId', async (req, res) => {
+	const { sessionId } = req.params;
+	if (!isValidPathSegment(sessionId)) {
+		return res.status(400).json({ error: 'Invalid sessionId' });
+	}
+
+	try {
+		const turnState = await readTurnState(sessionId);
+		return res.json(turnState);
+	} catch (err) {
+		console.error(`[server] GET /api/turn-state error for ${sessionId}: ${err.message}`);
+		return res.status(500).json({ error: err.message || 'Internal server error' });
+	}
+});
+
 // Start server — only when this file is run directly (not imported by tests)
 // Check if this module is the entry point by looking for a non-test environment.
 // Supertest imports the app without starting a server itself, so we guard the
 // listen() call to prevent EADDRINUSE when tests import server.js multiple times.
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(port, '127.0.0.1', () => {
-    console.log(`Express server running on http://localhost:${port}`);
-  });
+	app.listen(port, '127.0.0.1', () => {
+		console.log(`Express server running on http://localhost:${port}`);
+	});
 }
 
 export default app;

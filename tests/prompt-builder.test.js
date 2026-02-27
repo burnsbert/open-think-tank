@@ -129,6 +129,23 @@ describe('buildPrompt', () => {
       });
       expect(result.systemPrompt).toContain(SYSTEM_CONTENT);
     });
+
+    it('should include standup framing and think-gate in stable preamble', async () => {
+      const { filePath } = await writeTempSystemMd();
+      const result = await buildPrompt({
+        personaId: 'blake',
+        systemPromptPath: filePath,
+        messages: MESSAGES,
+        monologue: [],
+        notes: '',
+        attachedFiles: [],
+        personas: PERSONAS,
+      });
+
+      expect(result.systemPrompt).toContain('standup-style discussion');
+      expect(result.systemPrompt).toContain('BEFORE choosing speak');
+      expect(result.systemPrompt).toContain('NEVER:');
+    });
   });
 
   describe('conversation history section', () => {
@@ -698,6 +715,38 @@ describe('buildPrompt', () => {
       expect(historyPos).toBeGreaterThan(-1);
       expect(monologuePos).toBeGreaterThan(-1);
       expect(historyPos).toBeLessThan(monologuePos);
+    });
+
+    it('injects prior wave anti-repetition context when provided', async () => {
+      const { filePath } = await writeTempSystemMd();
+      const result = await buildPrompt({
+        personaId: 'blake',
+        systemPromptPath: filePath,
+        messages: MESSAGES,
+        monologue: [],
+        notes: '',
+        attachedFiles: [],
+        personas: PERSONAS,
+        priorWaveContext: { waveNumber: 2, spokeCount: 1 },
+      });
+
+      expect(result.userPrompt).toContain('What\'s Already Been Said');
+      expect(result.userPrompt).toContain('Only speak if your angle is genuinely different');
+    });
+
+    it('does not inject prior wave context when absent', async () => {
+      const { filePath } = await writeTempSystemMd();
+      const result = await buildPrompt({
+        personaId: 'blake',
+        systemPromptPath: filePath,
+        messages: MESSAGES,
+        monologue: [],
+        notes: '',
+        attachedFiles: [],
+        personas: PERSONAS,
+      });
+
+      expect(result.userPrompt).not.toContain('What\'s Already Been Said');
     });
   });
 });

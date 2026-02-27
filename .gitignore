@@ -3,6 +3,9 @@
 /.maestro/
 /.stories/
 
+# Environment
+.env
+
 # Runtime data
 data/
 chats/debug-*/

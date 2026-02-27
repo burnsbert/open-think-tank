@@ -4,7 +4,7 @@
  *
  * parseResponse(claudeOutput) takes the raw stdout from `claude -p --output-format json`
  * and returns a structured result:
- *   { success: true, action: "speak"|"think"|"research", data: {...} }
+ *   { success: true, action: "speak"|"think"|"research"|"pass"|"update_notes", data: {...} }
  *   { success: false, error: "description" }
  *
  * The claude -p --output-format json envelope looks like:
@@ -19,6 +19,8 @@ import {
   createSpeakResponse,
   createThinkResponse,
   createResearchResponse,
+  createPassResponse,
+  createUpdateNotesResponse,
 } from './helpers.js';
 
 // We import after test definitions so tests are registered before module loads
@@ -405,6 +407,50 @@ describe('research action', () => {
   });
 });
 
+describe('silent actions', () => {
+  it('parses valid pass action', async () => {
+    const passAction = createPassResponse();
+    const claudeOutput = wrapInClaudeEnvelope(passAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('pass');
+    expect(result.data.actionType).toBe('pass');
+  });
+
+  it('parses valid update_notes action', async () => {
+    const notesAction = createUpdateNotesResponse('Decision: ship with one round this week.');
+    const claudeOutput = wrapInClaudeEnvelope(notesAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('update_notes');
+    expect(result.data.noteUpdate).toContain('Decision:');
+  });
+
+  it('returns error when update_notes action is missing noteUpdate', async () => {
+    const notesAction = { actionType: 'update_notes', action: 'update_notes' };
+    const claudeOutput = wrapInClaudeEnvelope(notesAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/noteUpdate/);
+  });
+
+  it('returns error when actionType does not match action', async () => {
+    const mismatched = { actionType: 'pass', action: 'speak', text: 'hi' };
+    const claudeOutput = wrapInClaudeEnvelope(mismatched);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/must be paired/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Missing / invalid action field
 // ---------------------------------------------------------------------------
@@ -445,8 +491,9 @@ describe('missing or invalid action field', () => {
 
     const result = parseResponse(claudeOutput);
 
-    expect(result.success).toBe(false);
-    expect(result.error).toBeTruthy();
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('speak');
+    expect(result.data.text).toContain('plain string response');
   });
 
   it('returns error when persona JSON is a number', async () => {
@@ -482,8 +529,9 @@ describe('malformed inner persona JSON', () => {
 
     const result = parseResponse(claudeOutput);
 
-    expect(result.success).toBe(false);
-    expect(result.error).toBeTruthy();
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('speak');
+    expect(result.data.text).toContain('{invalid json');
   });
 
   it('returns error when inner persona JSON is empty string', async () => {
@@ -535,7 +583,7 @@ describe('result shape', () => {
     expect(result).toHaveProperty('success', true);
     expect(result).toHaveProperty('action');
     expect(result).toHaveProperty('data');
-    expect(['speak', 'think', 'research']).toContain(result.action);
+    expect(['speak', 'think', 'research', 'pass', 'update_notes']).toContain(result.action);
     expect(typeof result.data).toBe('object');
   });
 
@@ -627,4 +675,31 @@ describe('envelope structure variations', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
   });
+
+	it('recovers JSON object when prose surrounds it', async () => {
+		const personaJson = JSON.stringify(createSpeakResponse('Recovered from wrapper prose'));
+		const envelope = JSON.stringify({
+			type: 'result',
+			is_error: false,
+			result: `Here is the answer:\n${personaJson}\nThanks!`,
+		});
+
+		const result = parseResponse(envelope);
+		expect(result.success).toBe(true);
+		expect(result.action).toBe('speak');
+		expect(result.data.text).toBe('Recovered from wrapper prose');
+	});
+
+	it('falls back to speak action when result is plain text', async () => {
+		const envelope = JSON.stringify({
+			type: 'result',
+			is_error: false,
+			result: 'Plain text response from persona without JSON wrapper.',
+		});
+
+		const result = parseResponse(envelope);
+		expect(result.success).toBe(true);
+		expect(result.action).toBe('speak');
+		expect(result.data.text).toContain('Plain text response');
+	});
 });

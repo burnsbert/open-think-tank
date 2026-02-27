@@ -15,7 +15,7 @@ import path from 'path';
 import os from 'os';
 
 // Module under test — imported after each test so we can verify on fresh state
-let readMonologue, appendMonologue, writeSessionChat, ensureSessionDir;
+let readMonologue, appendMonologue, writeSessionChat, ensureSessionDir, writePersonaStatus, readSessionStatuses;
 
 beforeEach(async () => {
   const mod = await import('../lib/persistence.js');
@@ -23,6 +23,8 @@ beforeEach(async () => {
   appendMonologue = mod.appendMonologue;
   writeSessionChat = mod.writeSessionChat;
   ensureSessionDir = mod.ensureSessionDir;
+  writePersonaStatus = mod.writePersonaStatus;
+  readSessionStatuses = mod.readSessionStatuses;
 });
 
 // ---------------------------------------------------------------------------
@@ -558,4 +560,50 @@ describe('Full persistence round-trip', () => {
       expect(monologue[0].text).toBe(`${personaId} is thinking`);
     }
   });
+});
+
+describe('persona status persistence', () => {
+	let tmpDir;
+
+	beforeEach(async () => {
+		tmpDir = await makeTempDir();
+	});
+
+	afterEach(async () => {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it('writes a status file per persona', async () => {
+		await writePersonaStatus(
+			'session-status',
+			'blake',
+			{ personaName: 'Blake', phase: 'executing_action', action: 'speak', actionType: 'raise_upside' },
+			tmpDir
+		);
+
+		const filePath = path.join(tmpDir, 'chats', 'session-status', 'status-blake.json');
+		const raw = await fs.readFile(filePath, 'utf8');
+		const parsed = JSON.parse(raw);
+		expect(parsed.personaId).toBe('blake');
+		expect(parsed.actionType).toBe('raise_upside');
+	});
+
+	it('reads all status files for a session', async () => {
+		await writePersonaStatus(
+			'session-status-read',
+			'blake',
+			{ personaName: 'Blake', phase: 'deciding_action', action: null, actionType: null },
+			tmpDir
+		);
+		await writePersonaStatus(
+			'session-status-read',
+			'yui',
+			{ personaName: 'Yui', phase: 'executing_action', action: 'research', actionType: 'research' },
+			tmpDir
+		);
+
+		const statuses = await readSessionStatuses('session-status-read', tmpDir);
+		expect(statuses).toHaveLength(2);
+		expect(statuses.map((s) => s.personaId).sort()).toEqual(['blake', 'yui']);
+	});
 });

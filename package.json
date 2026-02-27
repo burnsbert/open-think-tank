@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "vitest",
-    "dev": "concurrently \"npm run server\" \"npm run static\" \"npm run open-browser\"",
+    "kill-open-think-tank-servers": "node scripts/kill-open-think-tank-servers.mjs",
+    "dev": "npm run kill-open-think-tank-servers && concurrently \"npm run server\" \"npm run static\" \"npm run open-browser\"",
     "server": "node server.js",
     "static": "python3 -m http.server 8080",
     "open-browser": "sleep 2 && open http://localhost:8080"

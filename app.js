@@ -18,6 +18,7 @@ const monologueTitle = document.getElementById("monologue-modal-title");
 const monologueBody = document.getElementById("monologue-body");
 const monologueBackdrop = monologueModal ? monologueModal.querySelector(".monologue-backdrop") : null;
 const monologueCloseBtn = monologueModal ? monologueModal.querySelector(".monologue-close") : null;
+const appVersion = document.getElementById("app-version");
 
 const AUTO_CONTINUE_KEY = "open-think-tank-auto-continue";
 const API_BASE_URL = "http://localhost:3001";
@@ -43,6 +44,18 @@ let activeChatId = null;
 let sessionData = null;
 let turnMessageCount = 0;
 let autoContinueTimerId = null;
+const indicatorRemovalTimers = new Map();
+let statusPollTimerId = null;
+let statusPollInFlight = false;
+let turnPollTimerId = null;
+let turnPollInFlight = false;
+const lastStatusSnapshot = new Map();
+let statusPollFailureCount = 0;
+let turnPollFailureCount = 0;
+let turnCompletionSeenCount = 0;
+const POLL_BASE_MS = 250;
+const POLL_MAX_MS = 2000;
+const FINAL_TURN_REPOLLS = 3;
 
 function makeFallbackData() {
 	return {
@@ -145,6 +158,47 @@ function formatTime(timestampIso) {
 	} catch {
 		return "";
 	}
+}
+
+function formatActionTypeForUi(actionType, fallbackAction = null, provider = null) {
+	let providerSuffix = "";
+	if (provider === "claude_code") {
+		providerSuffix = " (claude code)";
+	}
+
+	if (typeof actionType === "string" && actionType.trim()) {
+		return `${actionType.replace(/_/g, " ")}${providerSuffix}`;
+	}
+	if (typeof fallbackAction === "string" && fallbackAction.trim()) {
+		return `${fallbackAction.replace(/_/g, " ")}${providerSuffix}`;
+	}
+	if (!actionType || typeof actionType !== "string") {
+		return `deciding action${providerSuffix}`;
+	}
+	return `${actionType.replace(/_/g, " ")}${providerSuffix}`;
+}
+
+const SILENT_ACTION_TYPES = new Set([
+	"think_hard",
+	"continue_monologue",
+	"research",
+	"pass",
+	"update_notes",
+]);
+
+function isSilentActionType(actionType) {
+	return typeof actionType === "string" && SILENT_ACTION_TYPES.has(actionType);
+}
+
+function formatStatusLabel(status) {
+	const typeOrAction = status?.actionType || status?.action || "deciding_action";
+	if (status?.phase === "deciding_action" && status?.actionType) {
+		return `deciding: ${status.actionType}`;
+	}
+	if (status?.phase === "executing_action" && status?.actionType) {
+		return `executing: ${status.actionType}`;
+	}
+	return typeOrAction;
 }
 
 function getInitials(name) {
@@ -339,9 +393,7 @@ async function openMonologueModal(personaId) {
 }
 
 /**
- * Mark all thought badges for a persona with the "has-new-thoughts" class,
- * triggering the pulse animation. This is called when a think/research
- * SSE event arrives for that persona.
+ * Mark all thought badges for a persona with the "has-new-thoughts" class.
  *
  * @param {string} personaId — the persona with new monologue entries
  */
@@ -466,7 +518,7 @@ function renderParticipants() {
  * Build a single message DOM element and append it to #chat-list.
  * Mirrors the DOM structure created per-message in renderMessages():
  *   article.message > buildAvatar() + div.message-content > (div.message-meta + p.text)
- * Used during SSE turns for smooth incremental delivery without full re-render.
+ * Used during polled turns for smooth incremental delivery without full re-render.
  *
  * @param {Object} message — a message object with { speakerId, timestamp, text }
  */
@@ -510,8 +562,21 @@ function appendMessage(message) {
 		row.append(content);
 	}
 
-	chatList.append(row);
+	const firstIndicator = chatList.querySelector("[data-thinking-persona]");
+	if (firstIndicator) {
+		chatList.insertBefore(row, firstIndicator);
+	} else {
+		chatList.append(row);
+	}
+	reorderInProgressIndicatorsToBottom();
 	chatList.scrollTop = chatList.scrollHeight;
+}
+
+function reorderInProgressIndicatorsToBottom() {
+	const indicators = chatList.querySelectorAll("[data-thinking-persona]");
+	for (const indicator of indicators) {
+		chatList.append(indicator);
+	}
 }
 
 /**
@@ -522,7 +587,7 @@ function appendMessage(message) {
  * @param {string} personaId — the persona currently thinking
  * @param {string} personaName — display name for the meta line
  */
-function showThinkingIndicator(personaId, personaName) {
+function showThinkingIndicator(personaId, personaName, actionType = null, provider = null) {
 	// Remove any existing indicator for this persona first (safety)
 	removeThinkingIndicator(personaId);
 
@@ -537,12 +602,15 @@ function showThinkingIndicator(personaId, personaName) {
 	const content = document.createElement("div");
 	const meta = document.createElement("div");
 	const speaker = document.createElement("span");
+	const status = document.createElement("span");
 	const dots = document.createElement("div");
 
 	content.className = "message-content";
 	meta.className = "message-meta";
 	speaker.className = "speaker";
 	speaker.textContent = name;
+	status.className = "thinking-status";
+	status.textContent = formatActionTypeForUi(actionType, null, provider);
 
 	dots.className = "thinking-dots";
 	dots.setAttribute("aria-hidden", "true");
@@ -550,7 +618,7 @@ function showThinkingIndicator(personaId, personaName) {
 		dots.append(document.createElement("span"));
 	}
 
-	meta.append(speaker);
+	meta.append(speaker, status);
 	content.append(meta, dots);
 
 	if (persona) {
@@ -561,7 +629,21 @@ function showThinkingIndicator(personaId, personaName) {
 	}
 
 	chatList.append(row);
+	reorderInProgressIndicatorsToBottom();
 	chatList.scrollTop = chatList.scrollHeight;
+}
+
+function updateThinkingIndicatorStatus(personaId, actionType, provider = null) {
+	const indicator = chatList.querySelector(
+		`[data-thinking-persona="${personaId}"]`
+	);
+	if (!indicator) {
+		return;
+	}
+	const status = indicator.querySelector(".thinking-status");
+	if (status) {
+		status.textContent = formatActionTypeForUi(actionType, null, provider);
+	}
 }
 
 /**
@@ -570,6 +652,11 @@ function showThinkingIndicator(personaId, personaName) {
  * @param {string} personaId — the persona whose indicator to remove
  */
 function removeThinkingIndicator(personaId) {
+	const timer = indicatorRemovalTimers.get(personaId);
+	if (timer) {
+		clearTimeout(timer);
+		indicatorRemovalTimers.delete(personaId);
+	}
 	const indicator = chatList.querySelector(
 		`[data-thinking-persona="${personaId}"]`
 	);
@@ -582,10 +669,95 @@ function removeThinkingIndicator(personaId) {
  * Remove ALL thinking indicators from the chat list (cleanup on turn end).
  */
 function removeAllThinkingIndicators() {
+	for (const timer of indicatorRemovalTimers.values()) {
+		clearTimeout(timer);
+	}
+	indicatorRemovalTimers.clear();
 	const indicators = chatList.querySelectorAll("[data-thinking-persona]");
 	for (const el of indicators) {
 		el.remove();
 	}
+}
+
+function stopStatusPolling() {
+	if (statusPollTimerId !== null) {
+		clearTimeout(statusPollTimerId);
+		statusPollTimerId = null;
+	}
+	statusPollInFlight = false;
+}
+
+function nextPollDelay(failureCount) {
+	const delay = POLL_BASE_MS * (2 ** Math.min(failureCount, 3));
+	return Math.min(delay, POLL_MAX_MS);
+}
+
+function scheduleStatusPoll() {
+	if (!continueBtn.disabled) return;
+	if (statusPollTimerId !== null) {
+		clearTimeout(statusPollTimerId);
+	}
+	statusPollTimerId = setTimeout(pollPersonaStatuses, nextPollDelay(statusPollFailureCount));
+}
+
+async function pollPersonaStatuses() {
+	if (!activeChatId || statusPollInFlight) {
+		return;
+	}
+	statusPollInFlight = true;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/status/${activeChatId}`);
+		if (!response.ok) {
+			statusPollFailureCount++;
+			return;
+		}
+		const statuses = await response.json();
+		if (!Array.isArray(statuses)) {
+			statusPollFailureCount++;
+			return;
+		}
+		statusPollFailureCount = 0;
+		for (const status of statuses) {
+			if (!status || !status.personaId) continue;
+			if (indicatorRemovalTimers.has(status.personaId)) continue;
+			const prev = lastStatusSnapshot.get(status.personaId);
+			lastStatusSnapshot.set(status.personaId, status);
+			if (status.phase === "completed" || status.phase === "failed") {
+				removeThinkingIndicator(status.personaId);
+				if (
+					status.phase === "completed"
+					&& (status.action === "think" || status.action === "research")
+					&& (!prev || prev.phase !== "completed" || prev.action !== status.action)
+				) {
+					markPersonaNewThoughts(status.personaId);
+				}
+				continue;
+			}
+			if (isSilentActionType(status.actionType) && status.phase === "completed") {
+				removeThinkingIndicator(status.personaId);
+				continue;
+			}
+			const persona = getPersonaById(status.personaId);
+			const personaName = status.personaName || persona?.displayName || persona?.name || status.personaId;
+			const label = formatStatusLabel(status);
+			if (!chatList.querySelector(`[data-thinking-persona="${status.personaId}"]`)) {
+				showThinkingIndicator(status.personaId, personaName, label, status.provider || null);
+			} else {
+				updateThinkingIndicatorStatus(status.personaId, label, status.provider || null);
+			}
+		}
+	} catch {
+		statusPollFailureCount++;
+	} finally {
+		statusPollInFlight = false;
+		scheduleStatusPoll();
+	}
+}
+
+function startStatusPolling() {
+	stopStatusPolling();
+	statusPollFailureCount = 0;
+	pollPersonaStatuses();
 }
 
 function renderMessages() {
@@ -730,64 +902,134 @@ function downloadSession() {
 }
 
 /* ---------------------------------------------------------------
-   SSE Client & Turn Trigger
+   Turn Kickoff + Polling
    --------------------------------------------------------------- */
 
-/**
- * Parse a buffer of SSE text into discrete events.
- * SSE frames are separated by double-newline (\n\n).
- * Each frame contains lines like:
- *   event: <type>
- *   data: <json>
- *
- * Returns { events: Array<{event, data}>, remainder: string }
- * where remainder is any incomplete frame text left over.
- */
-function parseSseBuffer(buffer) {
-	const events = [];
-	const frames = buffer.split("\n\n");
-	// The last element may be an incomplete frame
-	const remainder = frames.pop();
-
-	for (const frame of frames) {
-		if (!frame.trim()) continue;
-
-		let eventType = "";
-		let dataStr = "";
-
-		for (const line of frame.split("\n")) {
-			if (line.startsWith("event:")) {
-				eventType = line.slice("event:".length).trim();
-			} else if (line.startsWith("data:")) {
-				dataStr = line.slice("data:".length).trim();
-			}
-		}
-
-		if (eventType && dataStr) {
-			try {
-				events.push({ event: eventType, data: JSON.parse(dataStr) });
-			} catch {
-				console.error("[SSE] Failed to parse data for event:", eventType, dataStr);
-			}
-		}
+function stopTurnPolling() {
+	if (turnPollTimerId !== null) {
+		clearTimeout(turnPollTimerId);
+		turnPollTimerId = null;
 	}
-
-	return { events, remainder: remainder || "" };
+	turnPollInFlight = false;
 }
 
-/**
- * Trigger a full turn (round) of persona responses.
- * Sends POST /api/turn with the current session state, then reads
- * the SSE response stream using a manual parser (cannot use EventSource
- * because this is a POST request).
- */
+function scheduleTurnPoll() {
+	if (!continueBtn.disabled) return;
+	if (turnPollTimerId !== null) {
+		clearTimeout(turnPollTimerId);
+	}
+	turnPollTimerId = setTimeout(pollTurnProgress, nextPollDelay(turnPollFailureCount));
+}
+
+async function pollSessionSnapshot() {
+	if (!activeChatId) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/session/${activeChatId}`);
+		if (!response.ok) return;
+		const remoteSession = await response.json();
+		const localMessages = Array.isArray(sessionData.messages) ? sessionData.messages : [];
+		const remoteMessages = Array.isArray(remoteSession.messages) ? remoteSession.messages : [];
+		if (remoteMessages.length > localMessages.length) {
+			const existingIds = new Set(localMessages.map((m) => m.id));
+			for (const message of remoteMessages) {
+				if (!message?.id || existingIds.has(message.id)) continue;
+				sessionData.messages.push(message);
+				appendMessage(message);
+				turnMessageCount++;
+			}
+		}
+
+		const remoteNotes = remoteSession?.notes?.content || "";
+		if (!sessionData.notes) {
+			sessionData.notes = { content: "" };
+		}
+		if (sessionData.notes.content !== remoteNotes) {
+			const prevScrollTop = notesEditor.scrollTop;
+			sessionData.notes.content = remoteNotes;
+			notesEditor.value = remoteNotes;
+			notesEditor.scrollTop = prevScrollTop;
+		}
+
+		if (remoteSession.session) {
+			sessionData.session = remoteSession.session;
+		}
+		renderJsonPreview();
+		saveActiveChat();
+	} catch {
+		// Ignore transient fetch errors while polling.
+	}
+}
+
+async function fetchTurnState() {
+	if (!activeChatId) return null;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/turn-state/${activeChatId}`);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+function finalizeTurn() {
+	stopTurnPolling();
+	stopStatusPolling();
+	removeAllThinkingIndicators();
+	continueBtn.disabled = false;
+	saveActiveChat();
+	renderMessages();
+	renderJsonPreview();
+	if (turnMessageCount === 0) {
+		const notice = document.createElement("div");
+		notice.className = "system-notice";
+		notice.setAttribute("role", "status");
+		notice.textContent = "All personas are thinking quietly this round.";
+		chatList.append(notice);
+		chatList.scrollTop = chatList.scrollHeight;
+	}
+	resetAutoContinueTimer();
+}
+
+async function pollTurnProgress() {
+	if (turnPollInFlight || !activeChatId) {
+		return;
+	}
+	turnPollInFlight = true;
+	try {
+		await pollPersonaStatuses();
+		await pollSessionSnapshot();
+		const turnState = await fetchTurnState();
+		if (!turnState) {
+			turnPollFailureCount++;
+			return;
+		}
+		turnPollFailureCount = 0;
+		if (turnState.state === "completed" || turnState.state === "failed") {
+			turnCompletionSeenCount++;
+			if (turnCompletionSeenCount >= FINAL_TURN_REPOLLS) {
+				finalizeTurn();
+			}
+		}
+	} finally {
+		turnPollInFlight = false;
+		if (continueBtn.disabled) {
+			scheduleTurnPoll();
+		}
+	}
+}
+
+function startTurnPolling() {
+	stopTurnPolling();
+	turnPollFailureCount = 0;
+	turnCompletionSeenCount = 0;
+	pollTurnProgress();
+}
+
 async function triggerTurn() {
-	// Prevent concurrent turns — if button is already disabled, bail out
 	if (continueBtn.disabled) {
 		return;
 	}
 
-	// Don't trigger a turn until the user has spoken at least once
 	const hasUserMessage = sessionData.messages?.some(m =>
 		sessionData.personas?.find(p => p.id === m.speakerId)?.role === "human"
 	);
@@ -795,12 +1037,11 @@ async function triggerTurn() {
 		return;
 	}
 
-	// Clear auto-continue timer during the turn — it will be reset on 'done'
 	clearAutoContinueTimer();
-
-	// Disable Continue button and show spinner (CSS handles spinner display)
 	continueBtn.disabled = true;
 	turnMessageCount = 0;
+	lastStatusSnapshot.clear();
+	startStatusPolling();
 
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/turn`, {
@@ -817,132 +1058,24 @@ async function triggerTurn() {
 			})
 		});
 
-		if (!response.ok) {
-			const errBody = await response.json().catch(() => ({}));
-			console.error("[triggerTurn] Server error:", response.status, errBody.error || response.statusText);
+		if (response.status === 409) {
+			console.warn("[triggerTurn] Turn already in progress for this session");
+			startTurnPolling();
 			return;
 		}
 
-		// Read the SSE stream using getReader() + TextDecoder
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		let sseBuffer = "";
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			sseBuffer += decoder.decode(value, { stream: true });
-			const { events, remainder } = parseSseBuffer(sseBuffer);
-			sseBuffer = remainder;
-
-			for (const { event, data } of events) {
-				handleSseEvent(event, data);
-			}
+		if (response.status !== 202) {
+			const errBody = await response.json().catch(() => ({}));
+			console.error("[triggerTurn] Server error:", response.status, errBody.error || response.statusText);
+			stopStatusPolling();
+			continueBtn.disabled = false;
+			return;
 		}
-
-		// Process any trailing data in the buffer
-		if (sseBuffer.trim()) {
-			const { events } = parseSseBuffer(sseBuffer + "\n\n");
-			for (const { event, data } of events) {
-				handleSseEvent(event, data);
-			}
-		}
+		startTurnPolling();
 	} catch (err) {
 		console.error("[triggerTurn] Network/fetch error:", err);
-	} finally {
-		// Always re-enable the Continue button
+		stopStatusPolling();
 		continueBtn.disabled = false;
-	}
-}
-
-/**
- * Handle a single SSE event from the server.
- *
- * Event types:
- *   thinking — a persona is generating a response
- *   message  — a persona finished (speak, think, or research)
- *   notes    — session notes were updated by a persona
- *   done     — the turn (round) is complete
- *   error    — an error occurred for a persona
- */
-function handleSseEvent(eventType, data) {
-	switch (eventType) {
-		case "thinking":
-			showThinkingIndicator(data.personaId, data.personaName);
-			break;
-
-		case "message":
-			// Remove thinking indicator for this persona before rendering
-			removeThinkingIndicator(data.personaId);
-
-			if (data.action === "speak" && data.message) {
-				// Append the spoken message to sessionData and render incrementally
-				sessionData.messages.push(data.message);
-				appendMessage(data.message);
-				turnMessageCount++;
-			} else {
-				// think/research actions go to monologue only — log for debugging
-				console.log(`[message] ${data.personaId} performed: ${data.action}`);
-				// Pulse the thought badges for this persona to indicate new monologue
-				markPersonaNewThoughts(data.personaId);
-			}
-			// Reset auto-continue timer on any incoming message (speak, think, or research)
-			resetAutoContinueTimer();
-			break;
-
-		case "notes":
-			// Update the notes content in session data and the editor
-			if (data.content != null) {
-				if (!sessionData.notes) {
-					sessionData.notes = { content: "" };
-				}
-				sessionData.notes.content = data.content;
-				// Preserve user's scroll position while updating content
-				const prevScrollTop = notesEditor.scrollTop;
-				notesEditor.value = data.content;
-				notesEditor.scrollTop = prevScrollTop;
-				// Persist the updated notes to localStorage
-				saveActiveChat();
-			}
-			break;
-
-		case "done":
-			// Clean up any remaining thinking indicators
-			removeAllThinkingIndicators();
-
-			// Turn complete — save the updated session to localStorage
-			saveActiveChat();
-			// Re-render to ensure everything is in sync
-			renderMessages();
-			renderJsonPreview();
-
-			// If no messages were added during the round, show a system notice
-			// (appended after renderMessages so it isn't wiped by the full re-render)
-			if (turnMessageCount === 0) {
-				const notice = document.createElement("div");
-				notice.className = "system-notice";
-				notice.setAttribute("role", "status");
-				notice.textContent = "All personas are thinking quietly this round.";
-				chatList.append(notice);
-				chatList.scrollTop = chatList.scrollHeight;
-			}
-
-			// Reset auto-continue timer after turn completes
-			resetAutoContinueTimer();
-			break;
-
-		case "error":
-			// Remove thinking indicator for the errored persona
-			if (data.personaId) {
-				removeThinkingIndicator(data.personaId);
-			}
-			console.error(`[SSE error] persona=${data.personaId}:`, data.error);
-			break;
-
-		default:
-			console.warn("[SSE] Unknown event type:", eventType, data);
-			break;
 	}
 }
 
@@ -972,7 +1105,7 @@ function clearAutoContinueTimer() {
  *   - Otherwise, call triggerTurn() to start a new turn.
  *
  * Uses setTimeout (not setInterval) — fires once, then is reset by the
- * next event (user message, SSE message, or turn done).
+ * next event (user message, polled turn update, or turn completion).
  */
 function resetAutoContinueTimer() {
 	clearAutoContinueTimer();
@@ -1168,3 +1301,24 @@ notesPanel.addEventListener("drop", (event) => {
 });
 
 bootstrap();
+
+async function loadAppVersion() {
+	if (!appVersion) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/version`);
+		if (!response.ok) return;
+		const data = await response.json();
+		const resolvedVersion = typeof data?.displayVersion === "string" && data.displayVersion.trim()
+			? data.displayVersion.trim()
+			: typeof data?.version === "string" && data.version.trim()
+				? data.version.trim()
+				: null;
+		if (resolvedVersion) {
+			appVersion.textContent = `Version: ${resolvedVersion}`;
+		}
+	} catch {
+		// Keep placeholder when API is unavailable.
+	}
+}
+
+loadAppVersion();

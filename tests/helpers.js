@@ -136,8 +136,9 @@ export function createMockSpawn({
  * Helper to create a valid claude -p response object
  * for the "speak" action
  */
-export function createSpeakResponse(text, noteUpdate = null) {
+export function createSpeakResponse(text, noteUpdate = null, actionType = 'quick_response') {
   const response = {
+    actionType,
     action: 'speak',
     text,
   };
@@ -153,6 +154,7 @@ export function createSpeakResponse(text, noteUpdate = null) {
  */
 export function createThinkResponse(text) {
   return {
+    actionType: 'think_hard',
     action: 'think',
     text,
   };
@@ -164,8 +166,24 @@ export function createThinkResponse(text) {
  */
 export function createResearchResponse(query, findings) {
   return {
+    actionType: 'research',
     action: 'research',
     query,
     findings,
+  };
+}
+
+export function createPassResponse() {
+  return {
+    actionType: 'pass',
+    action: 'pass',
+  };
+}
+
+export function createUpdateNotesResponse(noteUpdate) {
+  return {
+    actionType: 'update_notes',
+    action: 'update_notes',
+    noteUpdate,
   };
 }

@@ -1,5 +1,6 @@
 const chatList = document.getElementById("chat-directory-list");
 const createChatButton = document.getElementById("create-chat");
+const appVersion = document.getElementById("app-version");
 
 const CHAT_INDEX_PATH = "./chats/index.json";
 const CHAT_STORAGE_PREFIX = "open-think-tank-chat-";
@@ -200,3 +201,24 @@ createChatButton.addEventListener("click", () => {
 });
 
 renderChatDirectory();
+
+async function loadAppVersion() {
+	if (!appVersion) return;
+	try {
+		const response = await fetch("http://localhost:3001/api/version");
+		if (!response.ok) return;
+		const data = await response.json();
+		const resolvedVersion = typeof data?.displayVersion === "string" && data.displayVersion.trim()
+			? data.displayVersion.trim()
+			: typeof data?.version === "string" && data.version.trim()
+				? data.version.trim()
+				: null;
+		if (resolvedVersion) {
+			appVersion.textContent = `Version: ${resolvedVersion}`;
+		}
+	} catch {
+		// Keep placeholder when API is unavailable.
+	}
+}
+
+loadAppVersion();

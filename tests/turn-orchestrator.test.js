@@ -19,6 +19,8 @@ import {
   createSpeakResponse,
   createThinkResponse,
   createResearchResponse,
+  createPassResponse,
+  createUpdateNotesResponse,
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -45,51 +47,41 @@ const AI_PERSONA_IDS = ['blake', 'yui', 'grant', 'julia'];
  * @param {string[]} [options.timeoutPersonas] - Persona IDs that should timeout
  * @returns {Function} Mock execCommand
  */
+function detectPersonaId(args) {
+  const promptIndex = args.indexOf('-p');
+  const prompt = promptIndex >= 0 ? args[promptIndex + 1] : '';
+  for (const id of AI_PERSONA_IDS) {
+    if (prompt.includes(`personas/${id}/system.md`) || prompt.includes(`# ${id}`) || prompt.includes(id)) {
+      return id;
+    }
+  }
+  const argStr = args.join(' ');
+  for (const id of AI_PERSONA_IDS) {
+    if (argStr.includes(`personas/${id}`)) return id;
+  }
+  return null;
+}
+
+function isDecisionPhaseCall(args) {
+  const toolsIndex = args.indexOf('--tools');
+  if (toolsIndex < 0) return false;
+  return args[toolsIndex + 1] === '';
+}
+
 function createMockExecCommand(responseMap = {}, options = {}) {
-  const { errorPersonas = [], timeoutPersonas = [] } = options;
+  const { errorPersonas = [], timeoutPersonas = [], decisionMap = null } = options;
 
   return vi.fn((command, args, opts, callback) => {
-    // Extract the prompt from args to determine which persona is being called.
-    // The prompt is the arg right after '-p'.
-    const promptIndex = args.indexOf('-p');
-    const prompt = promptIndex >= 0 ? args[promptIndex + 1] : '';
-
-    // Determine persona from prompt content (system prompt path contains persona ID)
-    let personaId = null;
-    for (const id of AI_PERSONA_IDS) {
-      if (prompt.includes(`personas/${id}/system.md`) || prompt.includes(`# ${id}`) || prompt.includes(id)) {
-        personaId = id;
-        break;
-      }
-    }
-
-    // Check the system prompt path in the args for persona detection
-    if (!personaId) {
-      for (const id of AI_PERSONA_IDS) {
-        const argStr = args.join(' ');
-        if (argStr.includes(`personas/${id}`)) {
-          personaId = id;
-          break;
-        }
-      }
-    }
-
-    // Also detect from the --append-system-prompt or prompt text
-    if (!personaId) {
-      // fallback: use call order tracking
-      personaId = AI_PERSONA_IDS[createMockExecCommand._callCount || 0];
-    }
+    const personaId = detectPersonaId(args);
+    const isDecision = isDecisionPhaseCall(args);
 
     if (timeoutPersonas.includes(personaId)) {
-      // Simulate timeout — never call callback
-      // The orchestrator should handle this via execFile timeout option
-      const timeoutMs = opts?.timeout || 120000;
       const timer = setTimeout(() => {
         const err = new Error('Command timed out');
         err.killed = true;
         err.signal = 'SIGTERM';
         callback(err, '', '');
-      }, 10); // Fast timeout for tests
+      }, 10);
       return { kill: vi.fn(() => clearTimeout(timer)) };
     }
 
@@ -100,8 +92,14 @@ function createMockExecCommand(responseMap = {}, options = {}) {
       return;
     }
 
-    // Default response
-    const response = responseMap[personaId] || createSpeakResponse(`Hello from ${personaId}`);
+    let response;
+    if (isDecision) {
+      const fullResponse = decisionMap?.[personaId] || responseMap[personaId] || createSpeakResponse(`Hello from ${personaId}`);
+      response = { actionType: fullResponse.actionType || 'quick_response' };
+    } else {
+      response = responseMap[personaId] || createSpeakResponse(`Hello from ${personaId}`);
+    }
+
     const envelope = {
       type: 'result',
       subtype: 'success',
@@ -126,6 +124,15 @@ function createMockBuildPrompt() {
     return {
       systemPrompt: `Mock system prompt for ${personaId}`,
       userPrompt: `Mock user prompt for ${personaId} using ${systemPromptPath}`,
+    };
+  });
+}
+
+function createMockBuildActionChoicePrompt() {
+  return vi.fn(async ({ personaId, systemPromptPath }) => {
+    return {
+      systemPrompt: `Mock choice system prompt for ${personaId}`,
+      userPrompt: `Mock choice user prompt for ${personaId} using ${systemPromptPath}`,
     };
   });
 }
@@ -177,6 +184,7 @@ function createTestOptions(overrides = {}) {
     onEvent: createMockOnEvent(),
     execCommand: createMockExecCommand(responseMap),
     buildPrompt: createMockBuildPrompt(),
+    buildActionChoicePrompt: createMockBuildActionChoicePrompt(),
     persistence: createMockPersistence(),
     basePath: '/tmp/test-base',
     ...overrides,
@@ -188,10 +196,12 @@ function createTestOptions(overrides = {}) {
 // ---------------------------------------------------------------------------
 
 let runTurn;
+let classifyIntent;
 
 beforeEach(async () => {
   const mod = await import('../lib/turn-orchestrator.js');
   runTurn = mod.runTurn;
+  classifyIntent = mod.classifyIntent;
 });
 
 // ---------------------------------------------------------------------------
@@ -221,10 +231,10 @@ describe('runTurn — basic functionality', () => {
     expect(opts.buildPrompt).toHaveBeenCalledTimes(4);
   });
 
-  it('calls execCommand for each AI persona', async () => {
+  it('calls execCommand for each AI persona (decision + execution)', async () => {
     const opts = createTestOptions();
     await runTurn(opts);
-    expect(opts.execCommand).toHaveBeenCalledTimes(4);
+    expect(opts.execCommand).toHaveBeenCalledTimes(8);
   });
 
   it('processes only AI personas, skipping human personas', async () => {
@@ -398,6 +408,39 @@ describe('runTurn — persona ordering', () => {
   });
 });
 
+describe('classifyIntent', () => {
+  it('classifies short single-message asks as simple', () => {
+    const messages = [
+      { id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: 'Quick thought?' },
+    ];
+    expect(classifyIntent(messages, PERSONAS)).toBe('simple');
+  });
+
+  it('classifies mid-length single-question asks as medium', () => {
+    const messages = [
+      {
+        id: 'msg-1',
+        speakerId: 'user',
+        timestamp: '2026-02-25T10:00:00.000Z',
+        text: 'Can you compare onboarding options for us? We need one recommendation by tomorrow.',
+      },
+    ];
+    expect(classifyIntent(messages, PERSONAS)).toBe('medium');
+  });
+
+  it('classifies multi-signal requests as complex', () => {
+    const messages = [
+      {
+        id: 'msg-1',
+        speakerId: 'user',
+        timestamp: '2026-02-25T10:00:00.000Z',
+        text: 'Please compare two architecture options, list tradeoffs, and give a migration plan. What breaks first? What should we do now?',
+      },
+    ];
+    expect(classifyIntent(messages, PERSONAS)).toBe('complex');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Speak action handling
 // ---------------------------------------------------------------------------
@@ -533,7 +576,7 @@ describe('runTurn — speak action', () => {
     expect(overflowCall).toBeDefined();
   });
 
-  it('limits simple round-1 speaking to two personas when running multi-round mode', async () => {
+  it('allows all personas to speak in round 1 (no budget)', async () => {
     const opts = createTestOptions({
       messages: [
         { id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: 'hello' },
@@ -550,53 +593,76 @@ describe('runTurn — speak action', () => {
 
     const result = await runTurn(opts);
     const speakEvents = opts.onEvent.events.filter((e) => e.type === 'message' && e.action === 'speak');
-    const thinkEvents = opts.onEvent.events.filter((e) => e.type === 'message' && e.action === 'think');
 
-    expect(result.messagesAdded).toBe(2);
-    expect(speakEvents).toHaveLength(2);
-    expect(thinkEvents.length).toBeGreaterThanOrEqual(2);
+    expect(result.messagesAdded).toBe(4);
+    expect(speakEvents).toHaveLength(4);
   });
 
-  it('uses a round-start snapshot for all persona prompts in parallel mode', async () => {
-    const callOrder = [];
-    const promptMessages = {};
-    const mockBuild = vi.fn(async ({ personaId, messages }) => {
-      callOrder.push(personaId);
-      promptMessages[personaId] = [...messages];
+  it('runs round 1 in two waves and gives wave 2 prior-wave context', async () => {
+    const promptCalls = [];
+    const mockBuild = vi.fn(async ({ personaId, messages, priorWaveContext }) => {
+      promptCalls.push({
+        personaId,
+        messages: [...messages],
+        priorWaveContext,
+      });
       return {
         systemPrompt: `System prompt for ${personaId}`,
         userPrompt: `User prompt for ${personaId}`,
       };
     });
 
-    // Force order: blake first
+    const complexUserText = 'Can each of you compare two onboarding approaches with tradeoffs, risks, and a recommendation?';
     const opts = createTestOptions({
       buildPrompt: mockBuild,
       messages: [
-        { id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: 'Blake, start us off' },
+        { id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: complexUserText },
       ],
       responseMap: {
-        blake: createSpeakResponse('Blake speaks first'),
-        yui: createSpeakResponse('Yui follows'),
-        grant: createThinkResponse('...'),
-        julia: createThinkResponse('...'),
+        blake: createSpeakResponse('Blake: use a seeded demo flow.'),
+        yui: createSpeakResponse('Yui: users need one guided first action.'),
+        grant: createSpeakResponse('Grant: flip it and let them edit a live debate.'),
+        julia: createSpeakResponse('Julia: tradeoff is clarity versus speed to value.'),
       },
+      turnCounter: 0,
     });
     await runTurn(opts);
 
-    // Blake goes first (mentioned)
-    expect(callOrder[0]).toBe('blake');
+    const wave1Calls = promptCalls.filter((call) => !call.priorWaveContext);
+    const wave2Calls = promptCalls.filter((call) => Boolean(call.priorWaveContext));
+    expect(wave1Calls).toHaveLength(2);
+    expect(wave2Calls).toHaveLength(2);
 
-    // In parallel mode all personas get the same round-start snapshot.
-    // No prompt should include messages generated during this same round.
-    for (const personaId of callOrder) {
-      const personaMessages = promptMessages[personaId];
-      const blakeMsg = personaMessages.find(m => m.speakerId === 'blake');
-      expect(blakeMsg).toBeUndefined();
-      expect(personaMessages).toHaveLength(1);
-      expect(personaMessages[0].speakerId).toBe('user');
+    for (const call of wave2Calls) {
+      expect(call.messages.some((m) => m.speakerId !== 'user')).toBe(true);
+      expect(call.priorWaveContext.waveNumber).toBe(2);
     }
   });
+
+	it('suppresses repetitive greeting pile-ons from later personas', async () => {
+		const compactPersonas = [
+			{ id: 'blake', name: 'Blake', displayName: 'Blake', role: 'ai-persona' },
+			{ id: 'yui', name: 'Yui', displayName: 'Yui', role: 'ai-persona' },
+			{ id: 'user', name: 'User', displayName: 'User', role: 'human' },
+		];
+		const opts = createTestOptions({
+			personas: compactPersonas,
+			messages: [
+				{ id: 'msg-1', speakerId: 'user', timestamp: '2026-02-25T10:00:00.000Z', text: 'Blake, quick hello check' },
+			],
+			responseMap: {
+				blake: createSpeakResponse('Hey there!'),
+				yui: createSpeakResponse('Hey there!'),
+			},
+		});
+
+		await runTurn(opts);
+
+		const speakEvents = opts.onEvent.events.filter((e) => e.type === 'message' && e.action === 'speak');
+		const thinkEvents = opts.onEvent.events.filter((e) => e.type === 'message' && e.action === 'think');
+		expect(speakEvents).toHaveLength(1);
+		expect(thinkEvents.some((e) => String(e.message?.text || '').includes('greeting-pile-on'))).toBe(true);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -721,6 +787,79 @@ describe('runTurn — research action', () => {
   });
 });
 
+describe('runTurn — pass and update_notes silent actions', () => {
+  it('handles pass with no chat message and no monologue write', async () => {
+    const opts = createTestOptions({
+      responseMap: {
+        blake: createPassResponse(),
+        yui: createThinkResponse('...'),
+        grant: createThinkResponse('...'),
+        julia: createThinkResponse('...'),
+      },
+    });
+    const initialCount = opts.messages.length;
+    await runTurn(opts);
+
+    expect(opts.messages.length).toBe(initialCount);
+    const passEvent = opts.onEvent.events.find(
+      (e) => e.type === 'message' && e.personaId === 'blake' && e.action === 'pass'
+    );
+    expect(passEvent).toBeDefined();
+  });
+
+  it('skips execution call when decision is pass', async () => {
+    const responseMap = {
+      blake: createPassResponse(),
+      yui: createThinkResponse('...'),
+      grant: createThinkResponse('...'),
+      julia: createThinkResponse('...'),
+    };
+    const opts = createTestOptions({
+      responseMap,
+      execCommand: createMockExecCommand(responseMap, {
+        decisionMap: {
+          blake: { actionType: 'pass' },
+          yui: { actionType: 'think_hard' },
+          grant: { actionType: 'think_hard' },
+          julia: { actionType: 'think_hard' },
+        },
+      }),
+    });
+
+    await runTurn(opts);
+
+    const blakeExecutionCalls = opts.execCommand.mock.calls.filter((call) => {
+      const args = call[1];
+      return detectPersonaId(args) === 'blake' && !isDecisionPhaseCall(args);
+    });
+
+    expect(blakeExecutionCalls).toHaveLength(0);
+    expect(opts.execCommand.mock.calls.length).toBe(7);
+  });
+
+  it('applies update_notes without adding a visible chat message', async () => {
+    const opts = createTestOptions({
+      notes: 'Existing notes',
+      responseMap: {
+        blake: createUpdateNotesResponse('New action item: validate rollout plan'),
+        yui: createThinkResponse('...'),
+        grant: createThinkResponse('...'),
+        julia: createThinkResponse('...'),
+      },
+    });
+    const initialCount = opts.messages.length;
+    await runTurn(opts);
+
+    expect(opts.messages.length).toBe(initialCount);
+    const notesEvents = opts.onEvent.events.filter((e) => e.type === 'notes');
+    expect(notesEvents.some((e) => e.content.includes('validate rollout plan'))).toBe(true);
+    const updateNotesEvent = opts.onEvent.events.find(
+      (e) => e.type === 'message' && e.personaId === 'blake' && e.action === 'update_notes'
+    );
+    expect(updateNotesEvent).toBeDefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Note update handling
 // ---------------------------------------------------------------------------
@@ -829,10 +968,15 @@ describe('runTurn — event emission', () => {
     await runTurn(opts);
 
     const events = opts.onEvent.events;
-    expect(events).toHaveLength(9);
-    expect(events.slice(0, 4).every(e => e.type === 'thinking')).toBe(true);
-    expect(events.slice(4, 8).every(e => e.type === 'message')).toBe(true);
-    expect(events[8].type).toBe('done');
+    const thinkingEvents = events.filter((e) => e.type === 'thinking');
+    const statusEvents = events.filter((e) => e.type === 'status');
+    const messageEvents = events.filter((e) => e.type === 'message');
+    const doneEvents = events.filter((e) => e.type === 'done');
+    expect(thinkingEvents).toHaveLength(4);
+    expect(statusEvents.length).toBeGreaterThanOrEqual(4);
+    expect(messageEvents).toHaveLength(4);
+    expect(doneEvents).toHaveLength(1);
+    expect(events[events.length - 1].type).toBe('done');
   });
 
   it('message events include the full message object for speak actions', async () => {
@@ -865,10 +1009,23 @@ describe('runTurn — error handling', () => {
     const opts = createTestOptions();
 
     opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
+      if (isDecisionPhaseCall(args)) {
+        const personaId = detectPersonaId(args);
+        const envelope = {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: JSON.stringify({ actionType: 'quick_response' }),
+          session_id: 'test',
+          duration_ms: 100,
+        };
+        process.nextTick(() => cb(null, JSON.stringify(envelope), ''));
+        return;
+      }
+
       const systemPromptIdx = args.indexOf('--system-prompt');
       const systemPrompt = systemPromptIdx >= 0 ? args[systemPromptIdx + 1] : '';
 
-      // Only force Blake to fail first parse attempt.
       if (systemPrompt.includes('blake') && !opts.execCommand._blakeRetried) {
         opts.execCommand._blakeRetried = true;
         const emptyEnvelope = {
@@ -896,8 +1053,8 @@ describe('runTurn — error handling', () => {
 
     await runTurn(opts);
 
-    // One extra call for Blake retry: 4 personas + 1 retry
-    expect(opts.execCommand.mock.calls.length).toBe(5);
+    // 4 decision + 4 execution + 1 retry for Blake = 9
+    expect(opts.execCommand.mock.calls.length).toBe(9);
     const errorEvents = opts.onEvent.events.filter(e => e.type === 'error');
     expect(errorEvents).toHaveLength(0);
     const doneEvents = opts.onEvent.events.filter(e => e.type === 'done');
@@ -957,13 +1114,11 @@ describe('runTurn — error handling', () => {
         julia: createSpeakResponse('Julia OK'),
       },
     });
-    // Make execCommand fail for blake
     const originalExec = opts.execCommand;
-    let callCount = 0;
+    let execCallCount = 0;
     opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
-      callCount++;
-      if (callCount === 1) {
-        // First persona fails
+      execCallCount++;
+      if (!isDecisionPhaseCall(args) && execCallCount === 2) {
         process.nextTick(() => cb(new Error('CLI crashed'), '', ''));
         return;
       }
@@ -972,24 +1127,30 @@ describe('runTurn — error handling', () => {
 
     await runTurn(opts);
 
-    // Round should still complete — 3 remaining personas get called
-    // Total calls: 4 (1 failed + 3 succeeded)
-    expect(opts.execCommand).toHaveBeenCalledTimes(4);
-    // Done event should still be emitted
     const doneEvents = opts.onEvent.events.filter(e => e.type === 'done');
     expect(doneEvents).toHaveLength(1);
   });
 
   it('emits an error event when a persona fails', async () => {
     const opts = createTestOptions();
-    let callCount = 0;
     opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
-      callCount++;
-      if (callCount === 1) {
+      const personaId = detectPersonaId(args);
+      if (isDecisionPhaseCall(args)) {
+        const envelope = {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: JSON.stringify({ actionType: 'quick_response' }),
+          session_id: 'test',
+          duration_ms: 100,
+        };
+        process.nextTick(() => cb(null, JSON.stringify(envelope), ''));
+        return;
+      }
+      if (personaId === 'blake') {
         process.nextTick(() => cb(new Error('Boom'), '', ''));
         return;
       }
-      // Success for others
       const envelope = {
         type: 'result',
         subtype: 'success',
@@ -1005,17 +1166,27 @@ describe('runTurn — error handling', () => {
 
     const errorEvents = opts.onEvent.events.filter(e => e.type === 'error');
     expect(errorEvents.length).toBeGreaterThanOrEqual(1);
-    expect(errorEvents[0].personaId).toBeDefined();
+    expect(errorEvents[0].personaId).toBe('blake');
     expect(errorEvents[0].error).toBeDefined();
   });
 
   it('handles malformed JSON from claude gracefully', async () => {
     const opts = createTestOptions();
-    let callCount = 0;
     opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
-      callCount++;
-      if (callCount === 1) {
-        // Return malformed JSON
+      const personaId = detectPersonaId(args);
+      if (isDecisionPhaseCall(args)) {
+        const envelope = {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: JSON.stringify({ actionType: 'quick_response' }),
+          session_id: 'test',
+          duration_ms: 100,
+        };
+        process.nextTick(() => cb(null, JSON.stringify(envelope), ''));
+        return;
+      }
+      if (personaId === 'blake') {
         process.nextTick(() => cb(null, 'not valid json at all', ''));
         return;
       }
@@ -1032,7 +1203,6 @@ describe('runTurn — error handling', () => {
 
     await runTurn(opts);
 
-    // Should emit error for malformed persona, continue for others
     const errorEvents = opts.onEvent.events.filter(e => e.type === 'error');
     expect(errorEvents.length).toBeGreaterThanOrEqual(1);
     const doneEvents = opts.onEvent.events.filter(e => e.type === 'done');
@@ -1042,12 +1212,15 @@ describe('runTurn — error handling', () => {
   it('handles buildPrompt failure gracefully', async () => {
     const opts = createTestOptions();
     let callCount = 0;
-    opts.buildPrompt = vi.fn(async () => {
+    opts.buildPrompt = vi.fn(async ({ personaId, systemPromptPath }) => {
       callCount++;
       if (callCount === 1) {
         throw new Error('System prompt file not found');
       }
-      return 'Mock prompt';
+      return {
+        systemPrompt: `Mock system prompt for ${personaId}`,
+        userPrompt: `Mock user prompt for ${personaId} using ${systemPromptPath}`,
+      };
     });
 
     await runTurn(opts);
@@ -1116,11 +1289,21 @@ describe('runTurn — timeout handling', () => {
 
   it('handles timeout errors from execCommand', async () => {
     const opts = createTestOptions();
-    let callCount = 0;
     opts.execCommand = vi.fn((cmd, args, execOpts, cb) => {
-      callCount++;
-      if (callCount === 1) {
-        // Simulate timeout error
+      const personaId = detectPersonaId(args);
+      if (isDecisionPhaseCall(args)) {
+        const envelope = {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: JSON.stringify({ actionType: 'quick_response' }),
+          session_id: 'test',
+          duration_ms: 100,
+        };
+        process.nextTick(() => cb(null, JSON.stringify(envelope), ''));
+        return;
+      }
+      if (personaId === 'blake') {
         const err = new Error('Command timed out');
         err.killed = true;
         err.signal = 'SIGTERM';
@@ -1140,10 +1323,8 @@ describe('runTurn — timeout handling', () => {
 
     await runTurn(opts);
 
-    // Should emit error event for timed out persona
     const errorEvents = opts.onEvent.events.filter(e => e.type === 'error');
     expect(errorEvents.length).toBeGreaterThanOrEqual(1);
-    // Should still complete the round
     const doneEvents = opts.onEvent.events.filter(e => e.type === 'done');
     expect(doneEvents).toHaveLength(1);
   });
@@ -1282,10 +1463,23 @@ describe('runTurn — claude command construction', () => {
     const opts = createTestOptions({ model: 'opus' });
     await runTurn(opts);
 
-    for (const call of opts.execCommand.mock.calls) {
+    const executionCalls = opts.execCommand.mock.calls.filter(
+      call => !isDecisionPhaseCall(call[1])
+    );
+    const decisionCalls = opts.execCommand.mock.calls.filter(
+      call => isDecisionPhaseCall(call[1])
+    );
+
+    for (const call of executionCalls) {
       const args = call[1];
       expect(args).toContain('--model');
       expect(args).toContain('opus');
+    }
+    for (const call of decisionCalls) {
+      const args = call[1];
+      const modelIdx = args.indexOf('--model');
+      expect(modelIdx).toBeGreaterThanOrEqual(0);
+      expect(args[modelIdx + 1]).toBe('haiku');
     }
   });
 
@@ -1302,15 +1496,34 @@ describe('runTurn — claude command construction', () => {
     }
   });
 
-  it('enables specific tools via --tools flag', async () => {
+  it('enables specific tools via --tools flag for execution calls', async () => {
     const opts = createTestOptions();
     await runTurn(opts);
 
-    for (const call of opts.execCommand.mock.calls) {
+    const executionCalls = opts.execCommand.mock.calls.filter(
+      call => !isDecisionPhaseCall(call[1])
+    );
+    expect(executionCalls.length).toBeGreaterThan(0);
+    for (const call of executionCalls) {
       const args = call[1];
       expect(args).toContain('--tools');
       const toolsIdx = args.indexOf('--tools');
       expect(args[toolsIdx + 1]).toBe('Read,WebSearch,WebFetch,Glob,Grep');
+    }
+  });
+
+  it('disables tools for decision phase calls', async () => {
+    const opts = createTestOptions();
+    await runTurn(opts);
+
+    const decisionCalls = opts.execCommand.mock.calls.filter(
+      call => isDecisionPhaseCall(call[1])
+    );
+    expect(decisionCalls.length).toBeGreaterThan(0);
+    for (const call of decisionCalls) {
+      const args = call[1];
+      const toolsIdx = args.indexOf('--tools');
+      expect(args[toolsIdx + 1]).toBe('');
     }
   });
 
@@ -1638,5 +1851,17 @@ describe('runTurn — session data written to disk', () => {
     const writtenData = writeCall[1];
     expect(writtenData.session.id).toBe('test-session-001');
     expect(writtenData.session.updatedAt).toBeDefined();
+  });
+
+  it('persists provided turnCounter in written session metadata', async () => {
+    const opts = createTestOptions({
+      turnCounter: 4,
+      session: { id: 'test-session-001', title: 'Counter test' },
+    });
+    await runTurn(opts);
+
+    const writeCall = opts.persistence.writeSessionChat.mock.calls[0];
+    const writtenData = writeCall[1];
+    expect(writtenData.session.turnCounter).toBe(4);
   });
 });

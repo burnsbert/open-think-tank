@@ -24,6 +24,9 @@ import request from 'supertest';
 
 vi.mock('../lib/persistence.js', () => ({
   readMonologue: vi.fn(),
+  readSessionStatuses: vi.fn(),
+  readSessionChat: vi.fn(),
+  readTurnState: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
