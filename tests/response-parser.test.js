@@ -174,6 +174,39 @@ describe('speak action', () => {
     expect(result.data.noteUpdate).toBe('Decision: use prototyping');
   });
 
+  it('parses speak action with answer_question actionType', async () => {
+    const speakAction = createSpeakResponse('Yes, and here is why.', null, 'answer_question');
+    const claudeOutput = wrapInClaudeEnvelope(speakAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('speak');
+    expect(result.data.actionType).toBe('answer_question');
+  });
+
+  it('parses speak action with answer_simple_question actionType', async () => {
+    const speakAction = createSpeakResponse('Yes.', null, 'answer_simple_question');
+    const claudeOutput = wrapInClaudeEnvelope(speakAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('speak');
+    expect(result.data.actionType).toBe('answer_simple_question');
+  });
+
+  it('parses speak action with engage_[name] actionType', async () => {
+    const speakAction = createSpeakResponse('@Grant, can you pressure-test this?', null, 'engage_grant');
+    const claudeOutput = wrapInClaudeEnvelope(speakAction);
+
+    const result = parseResponse(claudeOutput);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe('speak');
+    expect(result.data.actionType).toBe('engage_grant');
+  });
+
   it('converts empty text speak action to think action (edge case #8)', async () => {
     const speakAction = { action: 'speak', text: '' };
     const claudeOutput = wrapInClaudeEnvelope(speakAction);
