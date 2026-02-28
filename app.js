@@ -19,6 +19,7 @@ const monologueBody = document.getElementById("monologue-body");
 const monologueBackdrop = monologueModal ? monologueModal.querySelector(".monologue-backdrop") : null;
 const monologueCloseBtn = monologueModal ? monologueModal.querySelector(".monologue-close") : null;
 const appVersion = document.getElementById("app-version");
+const sessionSummaryContent = document.getElementById("session-summary-content");
 
 const AUTO_CONTINUE_KEY = "open-think-tank-auto-continue";
 const API_BASE_URL = "http://localhost:3001";
@@ -971,6 +972,22 @@ async function fetchTurnState() {
 	}
 }
 
+async function fetchAndRenderSummary() {
+	if (!activeChatId || !sessionSummaryContent) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/summary/${activeChatId}`);
+		if (!response.ok) return;
+		const data = await response.json();
+		const content = (data?.content || "").trim();
+		if (content) {
+			sessionSummaryContent.textContent = content;
+			sessionSummaryContent.classList.remove("session-summary-empty");
+		}
+	} catch {
+		// Ignore transient errors — summary is non-critical
+	}
+}
+
 function finalizeTurn() {
 	stopTurnPolling();
 	stopStatusPolling();
@@ -979,6 +996,7 @@ function finalizeTurn() {
 	saveActiveChat();
 	renderMessages();
 	renderJsonPreview();
+	fetchAndRenderSummary();
 	if (turnMessageCount === 0) {
 		const notice = document.createElement("div");
 		notice.className = "system-notice";
@@ -1171,6 +1189,7 @@ async function bootstrap() {
 	applyPersonaDefaults();
 	saveActiveChat();
 	renderAll();
+	fetchAndRenderSummary();
 }
 
 chatInput.addEventListener("keydown", (event) => {

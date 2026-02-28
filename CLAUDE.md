@@ -39,9 +39,15 @@ npm run static
 |---------|-------------|
 | `npm start` | Start the API server on port 3001 |
 | `npm test` | Run all Vitest tests (no real claude calls) |
-| `npm run dev` | Start API server + static server + open browser |
+| `npm run dev` | Kill stale servers, then start API + static server + open browser |
 | `npm run server` | Alias for `npm start` |
 | `npm run static` | Start Python static file server on port 8080 |
+| `npm run kill-open-think-tank-servers` | Kill any stale server processes on ports 3001/8080 |
+
+To run a single test file:
+```bash
+npx vitest run tests/prompt-builder.test.js
+```
 
 ## Architecture
 
@@ -61,10 +67,11 @@ npm run static
 | File | Purpose |
 |------|---------|
 | `server.js` | Express app — API routes, CORS, SSE streaming |
-| `lib/prompt-builder.js` | Assembles the full prompt string for each persona's turn |
+| `lib/supervisor-orchestrator.js` | **Primary turn engine** — runs one supervisor `claude -p` call that plans all persona actions, then spawns per-persona execution calls |
+| `lib/turn-orchestrator.js` | Legacy per-persona orchestrator (still has tests; supervisor-orchestrator is what server.js uses) |
+| `lib/prompt-builder.js` | Assembles prompts for each persona's turn; exports `buildActionChoicePrompt` (phase 1) and `buildPrompt` (phase 2) |
 | `lib/response-parser.js` | Parses and validates `claude -p --output-format json` output |
-| `lib/persistence.js` | Reads/writes monologue files and session JSON to disk |
-| `lib/turn-orchestrator.js` | Orchestrates a full round: randomizes order, spawns `claude -p` per persona, emits events |
+| `lib/persistence.js` | Reads/writes monologue files, session JSON, turn state, and per-persona status to disk |
 | `personas/<id>/system.md` | System prompt files for each AI persona (blake, yui, grant, julia) |
 
 ### API Endpoints
@@ -145,6 +152,31 @@ Avatar files live in `avatars/`. `AVATAR_PATHS` and `AVATAR_TUNING` constants in
 | `open-think-tank-local-chats` | Registry of user-created chats |
 | `open-think-tank-deleted-file-chats` | IDs of file-backed chats soft-deleted by user |
 | `open-think-tank-auto-continue` | Auto-continue interval setting (OFF, 10s, 30s, 60s, 120s) |
+
+### Turn Execution Flow
+
+Each turn runs inside `supervisor-orchestrator.js`:
+
+1. **Supervisor planning** — one `claude -p` call with the last `SUMMARY_CONTEXT_POSTS` messages + session summary produces a `personaActions` plan (which persona does what, with text pre-written)
+2. **Post-plan overrides** — 35% chance the second-highest-budget persona is forced to pass; question blocking prevents two personas from both asking questions
+3. **Local execution** — no additional claude calls; actions are executed directly from the plan: `speak` messages written to `session-chat.json`, `think`/`research` appended to monologue files, budget updated
+4. **Summary generation** — after the turn, a session summary is generated via Ollama (if configured) or Claude Code, written to `session-summary.json`
+
+Budget controls who acts: top-2 by overageBudget + name-mentioned personas act each turn; others earn random 10–60 budget for sitting out.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3001` | API server port |
+| `OTT_DEBUG` | `true` | Enable `-=-= [module]` debug logging to stdout |
+| `OLLAMA_ENABLED` | `false` | Set `true` to use Ollama for summaries |
+| `OLLAMA_DECISION_MODEL` | — | Ollama model for action decisions in turn-orchestrator |
+| `OLLAMA_SUMMARY_MODEL` | falls back to `OLLAMA_DECISION_MODEL` | Ollama model for session summary generation |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API base URL |
+| `SUMMARY_CONTEXT_POSTS` | `5` | Recent messages passed verbatim to the supervisor (older messages covered by summary) |
+
+A `.env` file in the project root is auto-loaded by `server.js` (keys not already in `process.env` only). Format: `KEY=VALUE`, `#` comments supported.
 
 ### Adding a Seeded Chat
 

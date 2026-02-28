@@ -16,11 +16,13 @@ import os from 'os';
 // system.md files rather than mocking fs — this gives more realistic coverage.
 
 let buildPrompt;
+let buildActionChoicePrompt;
 
 beforeEach(async () => {
   // Fresh import each time (vitest module cache is reset between files, not tests)
   const mod = await import('../lib/prompt-builder.js');
   buildPrompt = mod.buildPrompt;
+  buildActionChoicePrompt = mod.buildActionChoicePrompt;
 });
 
 // ---------------------------------------------------------------------------
@@ -144,7 +146,43 @@ describe('buildPrompt', () => {
 
       expect(result.systemPrompt).toContain('standup-style discussion');
       expect(result.systemPrompt).toContain('BEFORE choosing speak');
+      expect(result.systemPrompt).toContain('For greetings/small talk');
+      expect(result.systemPrompt).toContain('Do not force specialty framing');
+      expect(result.systemPrompt).toContain('Use persona specialty framing only');
       expect(result.systemPrompt).toContain('NEVER:');
+    });
+  });
+
+  describe('social tone guardrails', () => {
+    it('should include social-first guidance in action-choice prompt', async () => {
+      const result = await buildActionChoicePrompt({
+        personaId: 'blake',
+        messages: [{ id: 'm1', speakerId: 'user', timestamp: '2026-02-26T00:00:00.000Z', text: 'hi' }],
+        monologue: [],
+        personas: PERSONAS,
+        conversationSummary: '',
+        notes: '',
+      });
+
+      expect(result.systemPrompt).toContain('lightweight social text');
+      expect(result.systemPrompt).toContain('prefer quick_response or answer_simple_question');
+      expect(result.systemPrompt).toContain('prefer think_hard or pass');
+    });
+
+    it('should not force specialty framing for lightweight messages', async () => {
+      const { filePath } = await writeTempSystemMd();
+      const result = await buildPrompt({
+        personaId: 'blake',
+        systemPromptPath: filePath,
+        messages: [{ id: 'm1', speakerId: 'user', timestamp: '2026-02-26T00:00:00.000Z', text: 'hello' }],
+        monologue: [],
+        notes: '',
+        attachedFiles: [],
+        personas: PERSONAS,
+      });
+
+      expect(result.systemPrompt).toContain('avoid turning the response into a framework');
+      expect(result.systemPrompt).toContain('substantive question or requests analysis');
     });
   });
 

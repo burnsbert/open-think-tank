@@ -973,7 +973,7 @@ h1 {
 
 .notes-editor {
 	flex: 1;
-	min-height: 300px;
+	min-height: 120px;
 	min-width: 0;
 	margin: 14px;
 }
@@ -1095,6 +1095,45 @@ h1 {
 	flex-shrink: 0;
 	border-top: 1px solid var(--divider);
 	padding: 12px 16px 14px;
+}
+
+/* ============================================================
+   SESSION SUMMARY
+   ============================================================ */
+.session-summary-section {
+	flex-shrink: 0;
+	border-top: 1px solid var(--divider);
+	padding: 12px 16px 16px;
+	transition: border-color 220ms ease;
+}
+
+.session-summary-heading {
+	display: block;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--muted);
+	margin-bottom: 8px;
+	transition: color 220ms ease;
+}
+
+.session-summary-content {
+	font-size: 13px;
+	color: var(--text-secondary);
+	line-height: 1.6;
+	white-space: pre-wrap;
+	max-height: 180px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--panel-border) transparent;
+	transition: color 220ms ease;
+}
+
+.session-summary-empty {
+	color: var(--muted);
+	font-style: italic;
+	transition: color 220ms ease;
 }
 
 .attached-files-title {

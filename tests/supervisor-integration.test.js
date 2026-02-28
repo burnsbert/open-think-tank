@@ -48,7 +48,7 @@ function createPlanExecCommand() {
 }
 
 describe('runSupervisorTurn integration', () => {
-	it('persists four persona responses for greeting turn', async () => {
+	it('only top-2 budget personas respond per turn', async () => {
 		const tmpBase = await mkdtemp(path.join(os.tmpdir(), 'ott-supervisor-int-'));
 		const sessionId = 'integration-greeting';
 
@@ -69,6 +69,23 @@ describe('runSupervisorTurn integration', () => {
 				},
 			];
 
+			// Deterministic budget init: blake=40, yui=30, grant=20, julia=10
+			// → top-2 are blake and yui
+			const budgetValues = [40, 30, 20, 10];
+			let budgetIdx = 0;
+
+			// Supervisor plan only needs the top-2 personas
+			const execCommand = (command, args, options, callback) => {
+				const plan = {
+					personaActions: [
+						{ personaId: 'blake', actionType: 'quick_response', action: 'speak', text: 'I am Blake.' },
+						{ personaId: 'yui',   actionType: 'quick_response', action: 'speak', text: 'I am Yui.' },
+					],
+				};
+				const envelope = { type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(plan) };
+				process.nextTick(() => callback(null, JSON.stringify(envelope), ''));
+			};
+
 			await runSupervisorTurn({
 				sessionId,
 				session: { id: sessionId, title: 'Integration Turn' },
@@ -78,15 +95,18 @@ describe('runSupervisorTurn integration', () => {
 				personas,
 				model: 'haiku',
 				basePath: tmpBase,
-				execCommand: createPlanExecCommand(),
+				execCommand,
 				persistence,
+				initialBudgetFn: () => budgetValues[budgetIdx++],
+				secondPassRollFn: () => 1, // disable forced-pass roll for determinism
 			});
 
 			const turnState = await persistence.readTurnState(sessionId, tmpBase);
 			expect(turnState.state).toBe('completed');
 
+			// Only blake and yui (top-2) should have status entries
 			const statuses = await persistence.readSessionStatuses(sessionId, tmpBase);
-			expect(statuses).toHaveLength(4);
+			expect(statuses).toHaveLength(2);
 			for (const status of statuses) {
 				expect(status.phase).toBe('completed');
 				expect(status.action).toBe('speak');
@@ -95,13 +115,10 @@ describe('runSupervisorTurn integration', () => {
 
 			const sessionChat = await persistence.readSessionChat(sessionId, tmpBase);
 			expect(sessionChat).toBeTruthy();
-			expect(Array.isArray(sessionChat.messages)).toBe(true);
-			expect(sessionChat.messages.length).toBe(5);
-
 			const aiMessages = sessionChat.messages.filter((m) => m.speakerId !== 'user');
-			expect(aiMessages).toHaveLength(4);
+			expect(aiMessages).toHaveLength(2);
 			const aiIds = aiMessages.map((m) => m.speakerId).sort();
-			expect(aiIds).toEqual(['blake', 'grant', 'julia', 'yui']);
+			expect(aiIds).toEqual(['blake', 'yui']);
 		} finally {
 			await rm(tmpBase, { recursive: true, force: true });
 		}

@@ -51,6 +51,7 @@ import {
 	readSessionStatuses,
 	readSessionChat,
 	readTurnState,
+	readSummary,
 } from './lib/persistence.js';
 
 const app = express();
@@ -214,6 +215,22 @@ app.get('/api/turn-state/:sessionId', async (req, res) => {
 		return res.json(turnState);
 	} catch (err) {
 		console.error(`[server] GET /api/turn-state error for ${sessionId}: ${err.message}`);
+		return res.status(500).json({ error: err.message || 'Internal server error' });
+	}
+});
+
+// GET /api/summary/:sessionId — fetch the current session summary
+app.get('/api/summary/:sessionId', async (req, res) => {
+	const { sessionId } = req.params;
+	if (!isValidPathSegment(sessionId)) {
+		return res.status(400).json({ error: 'Invalid sessionId' });
+	}
+
+	try {
+		const summary = await readSummary(sessionId);
+		return res.json(summary);
+	} catch (err) {
+		console.error(`[server] GET /api/summary error for ${sessionId}: ${err.message}`);
 		return res.status(500).json({ error: err.message || 'Internal server error' });
 	}
 });
