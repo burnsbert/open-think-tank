@@ -1,5 +1,18 @@
 # Private session files
 /.*.md
+/.maestro/
+/.stories/
+
+# Environment
+.env
+
+# Runtime data
+data/
+chats/debug-*/
+chats/local-*/
+
+# Dependencies
+node_modules/
 
 # macOS
 .DS_Store

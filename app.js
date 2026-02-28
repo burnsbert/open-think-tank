@@ -5,6 +5,24 @@ const notesEditor = document.getElementById("notes-editor");
 const jsonPreview = document.getElementById("json-preview");
 const downloadButton = document.getElementById("download-session");
 const pageTitle = document.getElementById("chat-page-title");
+const attachedFilesList = document.getElementById("attached-files-list");
+const attachedDropzone = document.getElementById("attached-dropzone");
+const attachedFilePicker = document.getElementById("attached-file-picker");
+const attachedBrowseBtn = document.getElementById("attached-browse-btn");
+const notesPanel = document.querySelector(".notes-panel");
+const continueBtn = document.getElementById("continue-btn");
+const autoContinueSelect = document.getElementById("auto-continue-select");
+const modelSelect = document.getElementById("model-select");
+const monologueModal = document.getElementById("monologue-modal");
+const monologueTitle = document.getElementById("monologue-modal-title");
+const monologueBody = document.getElementById("monologue-body");
+const monologueBackdrop = monologueModal ? monologueModal.querySelector(".monologue-backdrop") : null;
+const monologueCloseBtn = monologueModal ? monologueModal.querySelector(".monologue-close") : null;
+const appVersion = document.getElementById("app-version");
+const sessionSummaryContent = document.getElementById("session-summary-content");
+
+const AUTO_CONTINUE_KEY = "open-think-tank-auto-continue";
+const API_BASE_URL = "http://localhost:3001";
 
 const CHAT_INDEX_PATH = "./chats/index.json";
 const CHAT_STORAGE_PREFIX = "open-think-tank-chat-";
@@ -25,6 +43,20 @@ const AVATAR_TUNING = {
 
 let activeChatId = null;
 let sessionData = null;
+let turnMessageCount = 0;
+let autoContinueTimerId = null;
+const indicatorRemovalTimers = new Map();
+let statusPollTimerId = null;
+let statusPollInFlight = false;
+let turnPollTimerId = null;
+let turnPollInFlight = false;
+const lastStatusSnapshot = new Map();
+let statusPollFailureCount = 0;
+let turnPollFailureCount = 0;
+let turnCompletionSeenCount = 0;
+const POLL_BASE_MS = 250;
+const POLL_MAX_MS = 2000;
+const FINAL_TURN_REPOLLS = 3;
 
 function makeFallbackData() {
 	return {
@@ -45,6 +77,7 @@ function makeFallbackData() {
 		notes: {
 			content: "Session notes go here."
 		},
+		attachedFiles: [],
 		messages: [
 			{
 				id: "msg-fallback-1",
@@ -120,11 +153,53 @@ function formatTime(timestampIso) {
 	try {
 		return new Intl.DateTimeFormat([], {
 			hour: "numeric",
-			minute: "2-digit"
+			minute: "2-digit",
+			second: "2-digit"
 		}).format(new Date(timestampIso));
 	} catch {
 		return "";
 	}
+}
+
+function formatActionTypeForUi(actionType, fallbackAction = null, provider = null) {
+	let providerSuffix = "";
+	if (provider === "claude_code") {
+		providerSuffix = " (claude code)";
+	}
+
+	if (typeof actionType === "string" && actionType.trim()) {
+		return `${actionType.replace(/_/g, " ")}${providerSuffix}`;
+	}
+	if (typeof fallbackAction === "string" && fallbackAction.trim()) {
+		return `${fallbackAction.replace(/_/g, " ")}${providerSuffix}`;
+	}
+	if (!actionType || typeof actionType !== "string") {
+		return `deciding action${providerSuffix}`;
+	}
+	return `${actionType.replace(/_/g, " ")}${providerSuffix}`;
+}
+
+const SILENT_ACTION_TYPES = new Set([
+	"think_hard",
+	"continue_monologue",
+	"research",
+	"pass",
+	"update_notes",
+]);
+
+function isSilentActionType(actionType) {
+	return typeof actionType === "string" && SILENT_ACTION_TYPES.has(actionType);
+}
+
+function formatStatusLabel(status) {
+	const typeOrAction = status?.actionType || status?.action || "deciding_action";
+	if (status?.phase === "deciding_action" && status?.actionType) {
+		return `deciding: ${status.actionType}`;
+	}
+	if (status?.phase === "executing_action" && status?.actionType) {
+		return `executing: ${status.actionType}`;
+	}
+	return typeOrAction;
 }
 
 function getInitials(name) {
@@ -134,6 +209,200 @@ function getInitials(name) {
 		.slice(0, 2)
 		.map((token) => token[0].toUpperCase())
 		.join("");
+}
+
+/**
+ * Close the monologue modal and restore focus.
+ */
+function closeMonologueModal() {
+	if (!monologueModal) return;
+	monologueModal.hidden = true;
+	document.body.style.overflow = "";
+	// Remove Escape key listener
+	document.removeEventListener("keydown", handleMonologueEscape);
+}
+
+/**
+ * Handle Escape key to close monologue modal.
+ */
+function handleMonologueEscape(event) {
+	if (event.key === "Escape") {
+		closeMonologueModal();
+	}
+}
+
+/**
+ * Build a single timeline entry DOM element for the monologue modal.
+ *
+ * @param {Object} entry — { type: "chat"|"think"|"research", text, speaker, timestamp, query?, findings? }
+ * @returns {HTMLElement}
+ */
+function buildMonologueEntry(entry) {
+	const el = document.createElement("div");
+	el.className = "monologue-entry";
+
+	const meta = document.createElement("div");
+	meta.className = "monologue-entry-meta";
+
+	const speaker = document.createElement("span");
+	speaker.className = "monologue-entry-speaker";
+
+	const time = document.createElement("time");
+	time.className = "monologue-entry-time";
+	time.dateTime = entry.timestamp || "";
+	time.textContent = formatTime(entry.timestamp);
+
+	if (entry.type === "think") {
+		el.classList.add("monologue-entry--thought");
+		speaker.textContent = "\uD83D\uDCAD " + (entry.speaker || "");
+	} else if (entry.type === "research") {
+		el.classList.add("monologue-entry--research");
+		speaker.textContent = "\uD83D\uDD0D " + (entry.speaker || "");
+	} else {
+		// chat message
+		speaker.textContent = entry.speaker || "";
+	}
+
+	meta.append(speaker, time);
+	el.append(meta);
+
+	if (entry.type === "research" && (entry.query || entry.findings)) {
+		// Show query and findings as structured content
+		if (entry.query) {
+			const queryLabel = document.createElement("span");
+			queryLabel.className = "monologue-entry-research-label";
+			queryLabel.textContent = "Query";
+			const queryText = document.createElement("p");
+			queryText.className = "monologue-entry-text";
+			queryText.textContent = entry.query;
+			el.append(queryLabel, queryText);
+		}
+		if (entry.findings) {
+			const findingsLabel = document.createElement("span");
+			findingsLabel.className = "monologue-entry-research-label";
+			findingsLabel.textContent = "Findings";
+			const findingsText = document.createElement("p");
+			findingsText.className = "monologue-entry-text";
+			findingsText.textContent = entry.findings;
+			el.append(findingsLabel, findingsText);
+		}
+	} else {
+		const text = document.createElement("p");
+		text.className = "monologue-entry-text";
+		text.textContent = entry.text || "";
+		el.append(text);
+	}
+
+	return el;
+}
+
+/**
+ * Open the monologue modal for a given persona.
+ * Fetches monologue data from the server, merges with chat messages,
+ * and displays a chronological timeline of all session activity for that persona.
+ *
+ * @param {string} personaId — the persona whose monologue to display
+ */
+async function openMonologueModal(personaId) {
+	if (!monologueModal || !monologueBody || !monologueTitle) return;
+
+	const persona = getPersonaById(personaId);
+	const displayName = persona ? (persona.displayName || persona.name) : personaId;
+	const speakerName = persona ? persona.name : personaId;
+
+	// Set the modal header title
+	monologueTitle.textContent = displayName + " — Monologue";
+
+	// Clear the "has-new-thoughts" badge for this persona (user has "read" the thoughts)
+	const badges = document.querySelectorAll(`.thought-badge[data-persona-id="${personaId}"]`);
+	for (const badge of badges) {
+		badge.classList.remove("has-new-thoughts");
+	}
+
+	// Clear previous body content
+	monologueBody.innerHTML = "";
+
+	// Show modal immediately (loading state)
+	monologueModal.hidden = false;
+	document.body.style.overflow = "hidden";
+	document.addEventListener("keydown", handleMonologueEscape);
+
+	// Fetch monologue data from server (gracefully handle failure)
+	let monologueEntries = [];
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/monologue/${activeChatId}/${personaId}`);
+		if (response.ok) {
+			monologueEntries = await response.json();
+		}
+	} catch {
+		// Server unavailable or endpoint not built yet — continue with empty monologue
+	}
+
+	// Gather chat messages for this persona from sessionData
+	const chatMessages = (sessionData.messages || [])
+		.filter((msg) => msg.speakerId === personaId)
+		.map((msg) => ({
+			type: "chat",
+			text: msg.text,
+			speaker: speakerName,
+			timestamp: msg.timestamp
+		}));
+
+	// Convert monologue entries to timeline format
+	const monologueItems = (monologueEntries || []).map((entry) => {
+		// Monologue entries from persistence have: { timestamp, text, type }
+		// Research entries may have combined text like "Research: query\nFindings: findings"
+		const item = {
+			type: entry.type || "think",
+			text: entry.text || "",
+			speaker: speakerName,
+			timestamp: entry.timestamp
+		};
+
+		// If research type, try to parse query/findings from text
+		if (item.type === "research" && item.text) {
+			const researchMatch = item.text.match(/^Research:\s*(.*?)(?:\nFindings:\s*(.*))?$/s);
+			if (researchMatch) {
+				item.query = researchMatch[1] ? researchMatch[1].trim() : "";
+				item.findings = researchMatch[2] ? researchMatch[2].trim() : "";
+			}
+		}
+
+		return item;
+	});
+
+	// Merge and sort by timestamp chronologically
+	const timeline = [...chatMessages, ...monologueItems].sort((a, b) => {
+		const dateA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+		const dateB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+		return dateA - dateB;
+	});
+
+	// Render the timeline
+	monologueBody.innerHTML = "";
+
+	if (timeline.length === 0) {
+		const empty = document.createElement("div");
+		empty.className = "monologue-empty";
+		empty.textContent = "No activity yet for " + speakerName + ".";
+		monologueBody.append(empty);
+	} else {
+		for (const entry of timeline) {
+			monologueBody.append(buildMonologueEntry(entry));
+		}
+	}
+}
+
+/**
+ * Mark all thought badges for a persona with the "has-new-thoughts" class.
+ *
+ * @param {string} personaId — the persona with new monologue entries
+ */
+function markPersonaNewThoughts(personaId) {
+	const badges = document.querySelectorAll(`.thought-badge[data-persona-id="${personaId}"]`);
+	for (const badge of badges) {
+		badge.classList.add("has-new-thoughts");
+	}
 }
 
 function buildAvatar(persona) {
@@ -149,6 +418,7 @@ function buildAvatar(persona) {
 	const position = parsePosition(persona.avatarPosition);
 	const scale = Number(persona.avatarScale || 1);
 	const isUserPersona = persona.id === "user";
+	const isAiPersona = persona.role === "ai-persona";
 
 	avatarWrap.className = "avatar-wrap";
 	avatarClip.className = "avatar-clip";
@@ -198,11 +468,306 @@ function buildAvatar(persona) {
 	preview.append(previewMedia, previewLabel);
 	avatarClip.append(image, fallback);
 	avatarWrap.append(avatarClip, preview);
+
+	// Add thought bubble badge for AI personas only
+	if (isAiPersona) {
+		const badge = document.createElement("button");
+		badge.className = "thought-badge";
+		badge.type = "button";
+		badge.setAttribute("data-persona-id", persona.id);
+		badge.setAttribute("aria-label", `View ${persona.name}'s monologue`);
+		badge.textContent = "\uD83D\uDCAD";
+		badge.addEventListener("click", (event) => {
+			event.stopPropagation();
+			openMonologueModal(persona.id);
+		});
+		avatarWrap.append(badge);
+	}
+
 	return avatarWrap;
+}
+
+function renderParticipants() {
+	const aiPersonas = (sessionData.personas || []).filter(
+		(p) => p.role !== "human"
+	);
+	if (aiPersonas.length === 0) {
+		return null;
+	}
+
+	const roster = document.createElement("div");
+	roster.className = "participant-roster";
+	roster.setAttribute("role", "status");
+	roster.setAttribute("aria-label", "Chat participants");
+
+	const label = document.createElement("p");
+	label.className = "participant-roster-label";
+	label.textContent = "The following participants are in the chat:";
+
+	const avatarRow = document.createElement("div");
+	avatarRow.className = "participant-roster-avatars";
+
+	for (const persona of aiPersonas) {
+		avatarRow.append(buildAvatar(persona));
+	}
+
+	roster.append(label, avatarRow);
+	return roster;
+}
+
+/**
+ * Build a single message DOM element and append it to #chat-list.
+ * Mirrors the DOM structure created per-message in renderMessages():
+ *   article.message > buildAvatar() + div.message-content > (div.message-meta + p.text)
+ * Used during polled turns for smooth incremental delivery without full re-render.
+ *
+ * @param {Object} message — a message object with { speakerId, timestamp, text }
+ */
+function appendMessage(message) {
+	// Look up persona; gracefully fall back if missing
+	const persona = getPersonaById(message.speakerId);
+	const name = persona ? persona.name : message.speakerId;
+	const isHuman = persona ? persona.role === "human" : false;
+
+	const row = document.createElement("article");
+	row.className = `message ${isHuman ? "user" : ""}`;
+
+	const content = document.createElement("div");
+	const meta = document.createElement("div");
+	const speaker = document.createElement("span");
+	const timestamp = document.createElement("time");
+	const text = document.createElement("p");
+
+	content.className = "message-content";
+	meta.className = "message-meta";
+	speaker.className = "speaker";
+	speaker.textContent = name;
+	timestamp.className = "timestamp";
+	timestamp.dateTime = message.timestamp;
+	timestamp.textContent = formatTime(message.timestamp);
+	text.className = "text";
+	text.textContent = message.text;
+
+	meta.append(speaker, timestamp);
+	content.append(meta, text);
+
+	if (persona) {
+		const avatar = buildAvatar(persona);
+		if (isHuman) {
+			row.append(content, avatar);
+		} else {
+			row.append(avatar, content);
+		}
+	} else {
+		// No persona found — render content only (no avatar)
+		row.append(content);
+	}
+
+	const firstIndicator = chatList.querySelector("[data-thinking-persona]");
+	if (firstIndicator) {
+		chatList.insertBefore(row, firstIndicator);
+	} else {
+		chatList.append(row);
+	}
+	reorderInProgressIndicatorsToBottom();
+	chatList.scrollTop = chatList.scrollHeight;
+}
+
+function reorderInProgressIndicatorsToBottom() {
+	const indicators = chatList.querySelectorAll("[data-thinking-persona]");
+	for (const indicator of indicators) {
+		chatList.append(indicator);
+	}
+}
+
+/**
+ * Show a "thinking" indicator for a persona in the chat list.
+ * Creates a temporary row with the persona's avatar and animated dots.
+ * Identified by data-thinking-persona attribute for later removal.
+ *
+ * @param {string} personaId — the persona currently thinking
+ * @param {string} personaName — display name for the meta line
+ */
+function showThinkingIndicator(personaId, personaName, actionType = null, provider = null) {
+	// Remove any existing indicator for this persona first (safety)
+	removeThinkingIndicator(personaId);
+
+	const persona = getPersonaById(personaId);
+	const name = personaName || (persona ? persona.name : personaId);
+
+	const row = document.createElement("article");
+	row.className = "thinking-indicator";
+	row.setAttribute("data-thinking-persona", personaId);
+	row.setAttribute("aria-label", `${name} is thinking`);
+
+	const content = document.createElement("div");
+	const meta = document.createElement("div");
+	const speaker = document.createElement("span");
+	const status = document.createElement("span");
+	const dots = document.createElement("div");
+
+	content.className = "message-content";
+	meta.className = "message-meta";
+	speaker.className = "speaker";
+	speaker.textContent = name;
+	status.className = "thinking-status";
+	status.textContent = formatActionTypeForUi(actionType, null, provider);
+
+	dots.className = "thinking-dots";
+	dots.setAttribute("aria-hidden", "true");
+	for (let i = 0; i < 3; i++) {
+		dots.append(document.createElement("span"));
+	}
+
+	meta.append(speaker, status);
+	content.append(meta, dots);
+
+	if (persona) {
+		const avatar = buildAvatar(persona);
+		row.append(avatar, content);
+	} else {
+		row.append(content);
+	}
+
+	chatList.append(row);
+	reorderInProgressIndicatorsToBottom();
+	chatList.scrollTop = chatList.scrollHeight;
+}
+
+function updateThinkingIndicatorStatus(personaId, actionType, provider = null) {
+	const indicator = chatList.querySelector(
+		`[data-thinking-persona="${personaId}"]`
+	);
+	if (!indicator) {
+		return;
+	}
+	const status = indicator.querySelector(".thinking-status");
+	if (status) {
+		status.textContent = formatActionTypeForUi(actionType, null, provider);
+	}
+}
+
+/**
+ * Remove the thinking indicator for a specific persona.
+ *
+ * @param {string} personaId — the persona whose indicator to remove
+ */
+function removeThinkingIndicator(personaId) {
+	const timer = indicatorRemovalTimers.get(personaId);
+	if (timer) {
+		clearTimeout(timer);
+		indicatorRemovalTimers.delete(personaId);
+	}
+	const indicator = chatList.querySelector(
+		`[data-thinking-persona="${personaId}"]`
+	);
+	if (indicator) {
+		indicator.remove();
+	}
+}
+
+/**
+ * Remove ALL thinking indicators from the chat list (cleanup on turn end).
+ */
+function removeAllThinkingIndicators() {
+	for (const timer of indicatorRemovalTimers.values()) {
+		clearTimeout(timer);
+	}
+	indicatorRemovalTimers.clear();
+	const indicators = chatList.querySelectorAll("[data-thinking-persona]");
+	for (const el of indicators) {
+		el.remove();
+	}
+}
+
+function stopStatusPolling() {
+	if (statusPollTimerId !== null) {
+		clearTimeout(statusPollTimerId);
+		statusPollTimerId = null;
+	}
+	statusPollInFlight = false;
+}
+
+function nextPollDelay(failureCount) {
+	const delay = POLL_BASE_MS * (2 ** Math.min(failureCount, 3));
+	return Math.min(delay, POLL_MAX_MS);
+}
+
+function scheduleStatusPoll() {
+	if (!continueBtn.disabled) return;
+	if (statusPollTimerId !== null) {
+		clearTimeout(statusPollTimerId);
+	}
+	statusPollTimerId = setTimeout(pollPersonaStatuses, nextPollDelay(statusPollFailureCount));
+}
+
+async function pollPersonaStatuses() {
+	if (!activeChatId || statusPollInFlight) {
+		return;
+	}
+	statusPollInFlight = true;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/status/${activeChatId}`);
+		if (!response.ok) {
+			statusPollFailureCount++;
+			return;
+		}
+		const statuses = await response.json();
+		if (!Array.isArray(statuses)) {
+			statusPollFailureCount++;
+			return;
+		}
+		statusPollFailureCount = 0;
+		for (const status of statuses) {
+			if (!status || !status.personaId) continue;
+			if (indicatorRemovalTimers.has(status.personaId)) continue;
+			const prev = lastStatusSnapshot.get(status.personaId);
+			lastStatusSnapshot.set(status.personaId, status);
+			if (status.phase === "completed" || status.phase === "failed") {
+				removeThinkingIndicator(status.personaId);
+				if (
+					status.phase === "completed"
+					&& (status.action === "think" || status.action === "research")
+					&& (!prev || prev.phase !== "completed" || prev.action !== status.action)
+				) {
+					markPersonaNewThoughts(status.personaId);
+				}
+				continue;
+			}
+			if (isSilentActionType(status.actionType) && status.phase === "completed") {
+				removeThinkingIndicator(status.personaId);
+				continue;
+			}
+			const persona = getPersonaById(status.personaId);
+			const personaName = status.personaName || persona?.displayName || persona?.name || status.personaId;
+			const label = formatStatusLabel(status);
+			if (!chatList.querySelector(`[data-thinking-persona="${status.personaId}"]`)) {
+				showThinkingIndicator(status.personaId, personaName, label, status.provider || null);
+			} else {
+				updateThinkingIndicatorStatus(status.personaId, label, status.provider || null);
+			}
+		}
+	} catch {
+		statusPollFailureCount++;
+	} finally {
+		statusPollInFlight = false;
+		scheduleStatusPoll();
+	}
+}
+
+function startStatusPolling() {
+	stopStatusPolling();
+	statusPollFailureCount = 0;
+	pollPersonaStatuses();
 }
 
 function renderMessages() {
 	chatList.innerHTML = "";
+
+	const roster = renderParticipants();
+	if (roster) {
+		chatList.append(roster);
+	}
 
 	for (const message of sessionData.messages || []) {
 		const persona = getPersonaById(message.speakerId);
@@ -247,12 +812,67 @@ function renderNotes() {
 }
 
 function renderJsonPreview() {
+	if (!jsonPreview) return;
 	jsonPreview.textContent = JSON.stringify(sessionData, null, "\t");
+}
+
+function renderAttachedFiles() {
+	const files = sessionData.attachedFiles || [];
+	attachedFilesList.innerHTML = "";
+
+	for (const path of files) {
+		const filename = path.split(/[/\\]/).pop() || path;
+
+		const li = document.createElement("li");
+		li.className = "attached-file-item";
+
+		const nameEl = document.createElement("span");
+		nameEl.className = "attached-file-name";
+		nameEl.textContent = filename;
+		nameEl.title = path;
+
+		const pathEl = document.createElement("span");
+		pathEl.className = "attached-file-path";
+		pathEl.textContent = path;
+
+		const removeBtn = document.createElement("button");
+		removeBtn.className = "attached-file-remove";
+		removeBtn.type = "button";
+		removeBtn.textContent = "×";
+		removeBtn.setAttribute("aria-label", `Remove ${filename}`);
+		removeBtn.addEventListener("click", () => removeAttachedFile(path));
+
+		li.append(nameEl, pathEl, removeBtn);
+		attachedFilesList.append(li);
+	}
+}
+
+function addAttachedFile(rawPath) {
+	const path = rawPath.trim();
+	if (!path) return;
+
+	if (!Array.isArray(sessionData.attachedFiles)) {
+		sessionData.attachedFiles = [];
+	}
+
+	if (!sessionData.attachedFiles.includes(path)) {
+		sessionData.attachedFiles.push(path);
+		saveActiveChat();
+		renderAttachedFiles();
+	}
+}
+
+function removeAttachedFile(path) {
+	if (!Array.isArray(sessionData.attachedFiles)) return;
+	sessionData.attachedFiles = sessionData.attachedFiles.filter((f) => f !== path);
+	saveActiveChat();
+	renderAttachedFiles();
 }
 
 function renderAll() {
 	renderMessages();
 	renderNotes();
+	renderAttachedFiles();
 	renderJsonPreview();
 	if (pageTitle) {
 		pageTitle.textContent = sessionData.session?.title || "Open Think Tank Session";
@@ -280,6 +900,245 @@ function downloadSession() {
 	link.download = `session-${activeChatId || "chat"}.json`;
 	link.click();
 	URL.revokeObjectURL(url);
+}
+
+/* ---------------------------------------------------------------
+   Turn Kickoff + Polling
+   --------------------------------------------------------------- */
+
+function stopTurnPolling() {
+	if (turnPollTimerId !== null) {
+		clearTimeout(turnPollTimerId);
+		turnPollTimerId = null;
+	}
+	turnPollInFlight = false;
+}
+
+function scheduleTurnPoll() {
+	if (!continueBtn.disabled) return;
+	if (turnPollTimerId !== null) {
+		clearTimeout(turnPollTimerId);
+	}
+	turnPollTimerId = setTimeout(pollTurnProgress, nextPollDelay(turnPollFailureCount));
+}
+
+async function pollSessionSnapshot() {
+	if (!activeChatId) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/session/${activeChatId}`);
+		if (!response.ok) return;
+		const remoteSession = await response.json();
+		const localMessages = Array.isArray(sessionData.messages) ? sessionData.messages : [];
+		const remoteMessages = Array.isArray(remoteSession.messages) ? remoteSession.messages : [];
+		if (remoteMessages.length > localMessages.length) {
+			const existingIds = new Set(localMessages.map((m) => m.id));
+			for (const message of remoteMessages) {
+				if (!message?.id || existingIds.has(message.id)) continue;
+				sessionData.messages.push(message);
+				appendMessage(message);
+				turnMessageCount++;
+			}
+		}
+
+		const remoteNotes = remoteSession?.notes?.content || "";
+		if (!sessionData.notes) {
+			sessionData.notes = { content: "" };
+		}
+		if (sessionData.notes.content !== remoteNotes) {
+			const prevScrollTop = notesEditor.scrollTop;
+			sessionData.notes.content = remoteNotes;
+			notesEditor.value = remoteNotes;
+			notesEditor.scrollTop = prevScrollTop;
+		}
+
+		if (remoteSession.session) {
+			sessionData.session = remoteSession.session;
+		}
+		renderJsonPreview();
+		saveActiveChat();
+	} catch {
+		// Ignore transient fetch errors while polling.
+	}
+}
+
+async function fetchTurnState() {
+	if (!activeChatId) return null;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/turn-state/${activeChatId}`);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+async function fetchAndRenderSummary() {
+	if (!activeChatId || !sessionSummaryContent) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/summary/${activeChatId}`);
+		if (!response.ok) return;
+		const data = await response.json();
+		const content = (data?.content || "").trim();
+		if (content) {
+			sessionSummaryContent.textContent = content;
+			sessionSummaryContent.classList.remove("session-summary-empty");
+		}
+	} catch {
+		// Ignore transient errors — summary is non-critical
+	}
+}
+
+function finalizeTurn() {
+	stopTurnPolling();
+	stopStatusPolling();
+	removeAllThinkingIndicators();
+	continueBtn.disabled = false;
+	saveActiveChat();
+	renderMessages();
+	renderJsonPreview();
+	fetchAndRenderSummary();
+	if (turnMessageCount === 0) {
+		const notice = document.createElement("div");
+		notice.className = "system-notice";
+		notice.setAttribute("role", "status");
+		notice.textContent = "All personas are thinking quietly this round.";
+		chatList.append(notice);
+		chatList.scrollTop = chatList.scrollHeight;
+	}
+	resetAutoContinueTimer();
+}
+
+async function pollTurnProgress() {
+	if (turnPollInFlight || !activeChatId) {
+		return;
+	}
+	turnPollInFlight = true;
+	try {
+		await pollPersonaStatuses();
+		await pollSessionSnapshot();
+		const turnState = await fetchTurnState();
+		if (!turnState) {
+			turnPollFailureCount++;
+			return;
+		}
+		turnPollFailureCount = 0;
+		if (turnState.state === "completed" || turnState.state === "failed") {
+			turnCompletionSeenCount++;
+			if (turnCompletionSeenCount >= FINAL_TURN_REPOLLS) {
+				finalizeTurn();
+			}
+		}
+	} finally {
+		turnPollInFlight = false;
+		if (continueBtn.disabled) {
+			scheduleTurnPoll();
+		}
+	}
+}
+
+function startTurnPolling() {
+	stopTurnPolling();
+	turnPollFailureCount = 0;
+	turnCompletionSeenCount = 0;
+	pollTurnProgress();
+}
+
+async function triggerTurn() {
+	if (continueBtn.disabled) {
+		return;
+	}
+
+	const hasUserMessage = sessionData.messages?.some(m =>
+		sessionData.personas?.find(p => p.id === m.speakerId)?.role === "human"
+	);
+	if (!hasUserMessage) {
+		return;
+	}
+
+	clearAutoContinueTimer();
+	continueBtn.disabled = true;
+	turnMessageCount = 0;
+	lastStatusSnapshot.clear();
+	startStatusPolling();
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/turn`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: activeChatId,
+				session: sessionData.session,
+				messages: sessionData.messages,
+				notes: sessionData.notes?.content || "",
+				attachedFiles: sessionData.attachedFiles || [],
+				model: modelSelect ? modelSelect.value : "haiku",
+				personas: sessionData.personas
+			})
+		});
+
+		if (response.status === 409) {
+			console.warn("[triggerTurn] Turn already in progress for this session");
+			startTurnPolling();
+			return;
+		}
+
+		if (response.status !== 202) {
+			const errBody = await response.json().catch(() => ({}));
+			console.error("[triggerTurn] Server error:", response.status, errBody.error || response.statusText);
+			stopStatusPolling();
+			continueBtn.disabled = false;
+			return;
+		}
+		startTurnPolling();
+	} catch (err) {
+		console.error("[triggerTurn] Network/fetch error:", err);
+		stopStatusPolling();
+		continueBtn.disabled = false;
+	}
+}
+
+/* ---------------------------------------------------------------
+   Auto-Continue Timer
+   --------------------------------------------------------------- */
+
+/**
+ * Clear the auto-continue timer without starting a new one.
+ * Called when: auto-continue is set to OFF, or a turn starts.
+ */
+function clearAutoContinueTimer() {
+	if (autoContinueTimerId !== null) {
+		clearTimeout(autoContinueTimerId);
+		autoContinueTimerId = null;
+	}
+}
+
+/**
+ * Reset (clear + restart) the auto-continue timer based on the current
+ * select value. If the select value is "0" (OFF), just clears any existing
+ * timer. Otherwise, starts a new setTimeout for the selected interval.
+ *
+ * When the timer fires:
+ *   - If the Continue button is disabled (turn in progress), do nothing.
+ *     The timer will be reset again when the turn finishes (done event).
+ *   - Otherwise, call triggerTurn() to start a new turn.
+ *
+ * Uses setTimeout (not setInterval) — fires once, then is reset by the
+ * next event (user message, polled turn update, or turn completion).
+ */
+function resetAutoContinueTimer() {
+	clearAutoContinueTimer();
+
+	if (!autoContinueSelect) return;
+
+	const intervalSeconds = parseInt(autoContinueSelect.value, 10);
+	if (!intervalSeconds || intervalSeconds <= 0) return;
+
+	autoContinueTimerId = setTimeout(() => {
+		autoContinueTimerId = null;
+		// Don't fire during an active turn
+		if (continueBtn && continueBtn.disabled) return;
+		triggerTurn();
+	}, intervalSeconds * 1000);
 }
 
 async function loadChatIndex() {
@@ -330,6 +1189,7 @@ async function bootstrap() {
 	applyPersonaDefaults();
 	saveActiveChat();
 	renderAll();
+	fetchAndRenderSummary();
 }
 
 chatInput.addEventListener("keydown", (event) => {
@@ -351,6 +1211,8 @@ chatForm.addEventListener("submit", (event) => {
 	saveActiveChat();
 	renderMessages();
 	renderJsonPreview();
+	// Automatically trigger a turn after the user speaks
+	triggerTurn();
 });
 
 notesEditor.addEventListener("input", () => {
@@ -366,4 +1228,116 @@ downloadButton.addEventListener("click", () => {
 	downloadSession();
 });
 
+// Auto-continue persistence and timer control
+if (autoContinueSelect) {
+	const savedAutoContinue = localStorage.getItem(AUTO_CONTINUE_KEY);
+	if (savedAutoContinue !== null) {
+		autoContinueSelect.value = savedAutoContinue;
+	}
+	autoContinueSelect.addEventListener("change", () => {
+		localStorage.setItem(AUTO_CONTINUE_KEY, autoContinueSelect.value);
+		const interval = parseInt(autoContinueSelect.value, 10);
+		if (!interval || interval <= 0) {
+			// OFF selected — clear the timer
+			clearAutoContinueTimer();
+		} else {
+			// New interval selected — reset the timer
+			resetAutoContinueTimer();
+		}
+	});
+}
+
+// Continue button click handler
+if (continueBtn) {
+	continueBtn.addEventListener("click", triggerTurn);
+}
+
+// Monologue modal close handlers
+if (monologueBackdrop) {
+	monologueBackdrop.addEventListener("click", closeMonologueModal);
+}
+if (monologueCloseBtn) {
+	monologueCloseBtn.addEventListener("click", closeMonologueModal);
+}
+
+// File picker (native OS dialog)
+async function browseFiles() {
+	if ("showOpenFilePicker" in window) {
+		try {
+			const handles = await window.showOpenFilePicker({ multiple: true });
+			for (const handle of handles) {
+				addAttachedFile(handle.name);
+			}
+		} catch {
+			// user cancelled
+		}
+	} else {
+		attachedFilePicker.click();
+	}
+}
+
+attachedBrowseBtn.addEventListener("click", browseFiles);
+attachedDropzone.addEventListener("click", (event) => {
+	if (event.target !== attachedBrowseBtn) browseFiles();
+});
+
+attachedFilePicker.addEventListener("change", () => {
+	for (const file of attachedFilePicker.files) {
+		addAttachedFile(file.name);
+	}
+	attachedFilePicker.value = "";
+});
+
+// Drag and drop — highlight when dragging over the whole notes panel
+let dragCounter = 0;
+
+notesPanel.addEventListener("dragenter", (event) => {
+	if (!event.dataTransfer.types.includes("Files")) return;
+	event.preventDefault();
+	dragCounter++;
+	attachedDropzone.classList.add("drag-over");
+});
+
+notesPanel.addEventListener("dragleave", () => {
+	dragCounter--;
+	if (dragCounter === 0) {
+		attachedDropzone.classList.remove("drag-over");
+	}
+});
+
+notesPanel.addEventListener("dragover", (event) => {
+	if (!event.dataTransfer.types.includes("Files")) return;
+	event.preventDefault();
+});
+
+notesPanel.addEventListener("drop", (event) => {
+	event.preventDefault();
+	dragCounter = 0;
+	attachedDropzone.classList.remove("drag-over");
+	for (const file of event.dataTransfer.files) {
+		addAttachedFile(file.name);
+	}
+});
+
 bootstrap();
+
+async function loadAppVersion() {
+	if (!appVersion) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/version`);
+		if (!response.ok) return;
+		const data = await response.json();
+		const resolvedVersion = typeof data?.displayVersion === "string" && data.displayVersion.trim()
+			? data.displayVersion.trim()
+			: typeof data?.version === "string" && data.version.trim()
+				? data.version.trim()
+				: null;
+		if (resolvedVersion) {
+			appVersion.textContent = `Version: ${resolvedVersion}`;
+		}
+	} catch {
+		// Keep placeholder when API is unavailable.
+	}
+}
+
+loadAppVersion();
